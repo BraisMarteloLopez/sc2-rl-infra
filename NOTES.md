@@ -11,11 +11,14 @@ Documento vivo de decisiones tomadas, restricciones detectadas y decisiones apar
 ### 1.1 Linux/Brais (entorno donde se ejecuta Fase 0)
 
 - **GPU:** NVIDIA H100 NVL en MIG slice GI=3 (~22 GB de los 94 GB totales del H100). Driver 580.105.08, CUDA 13.0.
-- **CPU:** AMD EPYC 9534 (Zen 4). 64 cores físicos / 128 hilos en hardware, **solo 12 online** ahora mismo: `6, 9, 20, 23, 30, 31, 80, 94, 96, 97, 100, 124`. CPU max MHz visible: 2450.
-- **OS:** Ubuntu 24.04.3 LTS, kernel 6.8.0, x86_64.
+- **CPU:** AMD EPYC 9534 (Zen 4). El host tiene 128 hilos, **el contenedor LXC nos asigna 12 cores fijos**: `6, 9, 20, 23, 30, 31, 80, 94, 96, 97, 100, 124` (cpuset cgroup, `Cpus_allowed_list`). No modificable desde dentro del contenedor. CPU max MHz visible: 2450.
+- **OS:** Ubuntu 24.04.3 LTS, kernel 6.8.0, x86_64. Contenedor LXC confirmado (`systemd-detect-virt: lxc`).
 - **RAM:** 59 GB, 56 GB libres.
-- **Disco:** rootfs montado sobre `pool-zfs/containers/NVIDIA_Brais` (probable LXC/contenedor ZFS). 467 GB total, 395 GB libres.
-- **Python:** 3.13.11 en miniconda base (`/home/master/miniconda3/bin/python3`).
+- **Disco:** rootfs montado sobre `pool-zfs/containers/NVIDIA_Brais`. 467 GB total, 395 GB libres.
+- **Python:** 3.13.11 en miniconda base (`/home/master/miniconda3/bin/python3`). conda disponible.
+- **Sudo:** aparentemente sin contraseña (a confirmar con un comando inocuo antes de depender de ello).
+- **Herramientas confirmadas:** git, curl, wget, unzip, gcc, make, tar, python3, pip3, conda.
+- **MIG:** slice `2g.24gb` fijo (~24 GB de VRAM, 2 de 7 GPC slices). Sin permisos para reconfigurar MIG desde el contenedor.
 
 ### 1.2 DGX Spark (no usada en Fase 0)
 
@@ -46,27 +49,24 @@ Documento vivo de decisiones tomadas, restricciones detectadas y decisiones apar
 
 ---
 
-## 4. Riesgos detectados (no resueltos)
+## 4. Restricciones duras confirmadas (no resueltas, pero asumidas)
 
-| Riesgo | Detalle | Estado |
+| Restricción | Detalle | Implicación |
 |---|---|---|
-| Cores limitados en Linux/Brais | Solo 12 online de 128 hilos. Si es límite del contenedor LXC, el techo de paralelismo SC2 queda topado. | En verificación (acción 2 abajo). |
-| Python 3.13 incompatible con PySC2 | PySC2 está estancado; soporta hasta ~3.11. | Mitigable creando env nuevo. |
-| Dataset de Blizzard puede no estar accesible en 2026 | Riesgo declarado en `01_PHASE0_infra.md §5`. | Pendiente verificar acceso. |
-| Permisos dentro del contenedor ZFS | SC2 puede requerir libs de sistema (SDL, libGL) que pidan sudo para instalarse. | Pendiente verificar. |
+| 12 cores en Linux/Brais | cpuset cgroup del contenedor LXC. No modificable desde dentro. | Rango N del benchmark = 1, 2, 4, 8, 12 (no 16). Techo absoluto de paralelismo SC2. |
+| MIG slice 2g.24gb fijo | ~24 GB VRAM, 2 de 7 GPC slices del H100 NVL. Sin permisos para reconfigurar. | Suficiente para Fase 0. Para Fase 1 (BC) será apretado; ratificar al cierre de esta fase. |
+| Python 3.13.11 incompatible con PySC2 | PySC2 está estancado; soporta hasta ~3.11. | Crear env conda con Python 3.10 o 3.11. |
+| Dataset de Blizzard puede no estar accesible en 2026 | Riesgo declarado en `01_PHASE0_infra.md §5`. | Pendiente verificar acceso (acción aún por planificar). |
 
 ---
 
 ## 5. Próximo paso pendiente
 
-**Acción 2 — Caracterización del límite de CPU en Linux/Brais.**
+**Acción 3 — Decisiones de instalación y creación del entorno Python.**
 
-Resolver si los 12 cores online son un límite duro del contenedor LXC o si se pueden poner más online. Cambia radicalmente el rango N a medir en el benchmark de throughput (1-12 vs 1-64).
-
-Los comandos exactos están en la conversación con Claude del 2026-05-11 (paso "Acción 2"). Resumen:
-
-1. Inspeccionar `/sys/devices/system/cpu/online` y `offline`.
-2. Detectar contenedor/cgroup y CPUs permitidas vía `/proc/1/cgroup` y `/proc/self/status`.
-3. Verificar herramientas mínimas: `git`, `curl`, `wget`, `unzip`, `gcc`, `make`.
-4. Verificar disponibilidad de `sudo` no-interactivo.
-5. Estado de MIG instances.
+A discutir:
+1. Versión exacta de SC2 Linux headless (candidato fuerte: 4.10.0, última build oficial de Blizzard).
+2. Versión exacta de PySC2 (candidato fuerte: 4.0.0).
+3. Versión exacta de Python (candidato: 3.11).
+4. Nombre del env conda y estrategia de pinning (`environment.yml` vs `requirements.txt`).
+5. Verificación final de `sudo` no-interactivo con un comando inocuo, antes de depender de él para instalar libs de sistema.
