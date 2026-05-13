@@ -2,7 +2,7 @@
 
 Documento vivo de decisiones tomadas, restricciones detectadas y decisiones aparcadas durante Fase 0.
 
-Última actualización: 2026-05-11.
+Última actualización: 2026-05-13.
 
 ---
 
@@ -55,18 +55,28 @@ Documento vivo de decisiones tomadas, restricciones detectadas y decisiones apar
 |---|---|---|
 | 12 cores en Linux/Brais | cpuset cgroup del contenedor LXC. No modificable desde dentro. | Rango N del benchmark = 1, 2, 4, 8, 12 (no 16). Techo absoluto de paralelismo SC2. |
 | MIG slice 2g.24gb fijo | ~24 GB VRAM, 2 de 7 GPC slices del H100 NVL. Sin permisos para reconfigurar. | Suficiente para Fase 0. Para Fase 1 (BC) será apretado; ratificar al cierre de esta fase. |
-| Python 3.13.11 incompatible con PySC2 | PySC2 está estancado; soporta hasta ~3.11. | Crear env conda con Python 3.10 o 3.11. |
+| Python 3.10 obligatorio (no 3.11) | `pysc2/lib/colors.py:121` usa `random.shuffle(seq, randfunc)`, API eliminada en Python 3.11. Verificado: 3.11.15 falla con `TypeError: Random.shuffle() takes 2 positional arguments but 3 were given` al importar `pysc2.lib.features`. 3.10.20 carga limpio. | Env conda fijado a `python=3.10`. 3.11 descartado. |
+| protobuf < 4 obligatorio | `s2clientprotocol` (dep de PySC2) trae `_pb2.py` generados con layout pre-4.21. protobuf ≥ 4 revienta en `descriptor.py:1027` (`Descriptors cannot be created directly`). Verificado: 7.34.1 falla, 3.20.3 OK. | Pin duro `protobuf<4` en el env. Pip baja `googleapis-common-protos` a 1.73.0 automáticamente para resolver el conflicto. |
 | Dataset de Blizzard puede no estar accesible en 2026 | Riesgo declarado en `01_PHASE0_infra.md §5`. | Pendiente verificar acceso (acción aún por planificar). |
+
+### 4.1 Banderas abiertas (no bloqueantes ahora, vigilar)
+
+- **numpy 2.2.6 instalado en el env.** PySC2 es de 2019 y numpy 2 eliminó aliases (`np.int`, `np.bool`, `np.float`). Los imports top-level de PySC2 pasan limpios, pero podría romper en runtime al lanzar partidas reales. Si pasa: pin `numpy<2` y reinstalar.
 
 ---
 
-## 5. Próximo paso pendiente
+## 5. Progreso de Fase 0
 
-**Acción 3 — Decisiones de instalación y creación del entorno Python.**
+**Hecho:**
+- Survey de hardware (§1, §4).
+- Fase 0 íntegramente en Linux/Brais (§2.1).
+- Versiones decididas y verificadas experimentalmente en Linux/Brais: Python 3.10.20, PySC2 4.0.0, protobuf 3.20.3, grpcio 1.80.0, numpy 2.2.6.
+- Env conda `sc2-rl-infra` creado en Linux/Brais. Imports de PySC2 (`sc2_env`, `actions`, `features`, `colors`) cargan limpios.
 
-A discutir:
-1. Versión exacta de SC2 Linux headless (candidato fuerte: 4.10.0, última build oficial de Blizzard).
-2. Versión exacta de PySC2 (candidato fuerte: 4.0.0).
-3. Versión exacta de Python (candidato: 3.11).
-4. Nombre del env conda y estrategia de pinning (`environment.yml` vs `requirements.txt`).
-5. Verificación final de `sudo` no-interactivo con un comando inocuo, antes de depender de él para instalar libs de sistema.
+**Pendiente inmediato:**
+- **Acción 6 — Descargar e instalar SC2 Linux 4.10.0** (binario headless oficial de Blizzard, ~5 GB cifrado con password EULA `iagreetotheeula`). Comandos en el chat de continuación.
+
+**Pendiente Fase 0 (no inmediato):**
+- Ratificar `sudo` no-interactivo cuando lo necesitemos para libs de sistema.
+- Congelar el env en `environment.yml` reproducible al cierre de Fase 0.
+- Benchmark de throughput SC2 (objetivo central de Fase 0). Rango N = {1, 2, 4, 8, 12}.
