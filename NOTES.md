@@ -57,7 +57,8 @@ Documento vivo de decisiones tomadas, restricciones detectadas y decisiones apar
 | MIG slice 2g.24gb fijo | ~24 GB VRAM, 2 de 7 GPC slices del H100 NVL. Sin permisos para reconfigurar. | Suficiente para Fase 0. Para Fase 1 (BC) será apretado; ratificar al cierre de esta fase. |
 | Python 3.10 obligatorio (no 3.11) | `pysc2/lib/colors.py:121` usa `random.shuffle(seq, randfunc)`, API eliminada en Python 3.11. Verificado: 3.11.15 falla con `TypeError: Random.shuffle() takes 2 positional arguments but 3 were given` al importar `pysc2.lib.features`. 3.10.20 carga limpio. | Env conda fijado a `python=3.10`. 3.11 descartado. |
 | protobuf < 4 obligatorio | `s2clientprotocol` (dep de PySC2) trae `_pb2.py` generados con layout pre-4.21. protobuf ≥ 4 revienta en `descriptor.py:1027` (`Descriptors cannot be created directly`). Verificado: 7.34.1 falla, 3.20.3 OK. | Pin duro `protobuf<4` en el env. Pip baja `googleapis-common-protos` a 1.73.0 automáticamente para resolver el conflicto. |
-| Dataset de Blizzard puede no estar accesible en 2026 | Riesgo declarado en `01_PHASE0_infra.md §5`. | Pendiente verificar acceso (acción aún por planificar). |
+| Egress hacia Akamai bloqueado desde Brais | DNS resuelve normal. TCP/443 a cualquier IP de Akamai (probado `blzdistsc2-a.akamaihd.net` con sus dos IPs por geo-DNS, edges alternativos vía `--resolve`, `www.akamai.com`, `www.blizzard.com`) timeout silenciosos. GitHub y otros HTTPS no-Akamai funcionan (200 OK en ~60 ms). mtr no produce hops (probable filtrado ICMP). Causa exacta (firewall LXC / ISP / upstream) no determinable desde dentro del contenedor. | Bloqueante para descarga directa desde Brais de cualquier asset alojado por Blizzard. Workaround obligatorio: sideload (descargar fuera y `scp` a Brais). Afecta también al dataset de replays (Fase 1) — ver row siguiente. |
+| Dataset de replays de Blizzard probablemente requiere sideload | Vive en el mismo CDN Akamai bloqueado desde Brais. El riesgo apuntado en `01_PHASE0_infra.md §5` ("Dataset puede no estar accesible") se concreta hoy: la causa probable no es que Blizzard lo haya retirado (al menos no el binario, que sigue vivo: el CDN responde a otras redes), sino que la red de Brais no llega a Akamai. | Verificar al inicio de Fase 1 con un URL del dataset. Mismo workaround que el binario: sideload. |
 
 ### 4.1 Banderas abiertas (no bloqueantes ahora, vigilar)
 
@@ -74,7 +75,7 @@ Documento vivo de decisiones tomadas, restricciones detectadas y decisiones apar
 - Env conda `sc2-rl-infra` creado en Linux/Brais. Imports de PySC2 (`sc2_env`, `actions`, `features`, `colors`) cargan limpios.
 
 **Pendiente inmediato:**
-- **Acción 6 — Descargar e instalar SC2 Linux 4.10.0** (binario headless oficial de Blizzard, ~5 GB cifrado con password EULA `iagreetotheeula`). Comandos en el chat de continuación.
+- **Acción 6 — Instalar SC2 Linux 4.10.0 vía sideload** (egress directo a Akamai desde Brais bloqueado; descarga en laptop externa y `scp` a Brais). Comandos en el chat de continuación.
 
 **Pendiente Fase 0 (no inmediato):**
 - Ratificar `sudo` no-interactivo cuando lo necesitemos para libs de sistema.
