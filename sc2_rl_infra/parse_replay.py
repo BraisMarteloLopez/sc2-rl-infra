@@ -45,16 +45,23 @@ def main(unused_argv):
         print(f"  Mapa:     {info.map_name}")
         print(f"  Versión:  {info.game_version} (base build {info.base_build})")
         print(f"  Duración: {info.game_duration_loops} game loops (~{info.game_duration_seconds:.0f} s)")
+        print(f"  local_map_path: {info.local_map_path!r}")
         for p in info.player_info:
             race = common_pb2.Race.Name(p.player_info.race_actual)
             res = sc_pb.Result.Name(p.player_result.result) if p.HasField("player_result") else "?"
             print(f"  Jugador {p.player_info.player_id}: {race} -> {res}")
 
-        controller.start_replay(sc_pb.RequestStartReplay(
+        # Pasamos los bytes del mapa explícitamente. Si no, SC2 falla con "Unable to
+        # open map" al resolver la ruta del replay (en Linux busca 'maps/' en minúscula
+        # y el directorio real es 'Maps/').
+        start_req = sc_pb.RequestStartReplay(
             replay_data=replay_data,
             options=interface,
             observed_player_id=FLAGS.observed_player,
-        ))
+        )
+        if info.local_map_path:
+            start_req.map_data = run_config.map_data(info.local_map_path)
+        controller.start_replay(start_req)
 
         feat = features.features_from_game_info(controller.game_info())
 
