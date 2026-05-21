@@ -36,6 +36,8 @@ Documento vivo de decisiones tomadas, restricciones detectadas y decisiones apar
 
 2. **La DGX Spark queda fuera del scope de Fase 0.** No se monta servicio de inferencia ni infra distribuida en ella ahora.
 
+3. **Monorepo (revisión 2026-05-21).** Todas las fases viven en este repo (`sc2-rl-infra`), organizado por subpaquetes, con un `RESULTS` por fase. Revierte el multi-repo del plan original (`00_OVERVIEW §3.1`): Fase 1 reutiliza código de Fase 0 (parser, perfiles de interfaz, env), así que separar repos forzaría duplicación o `sc2-rl-common` prematuro. Una sesión nueva de Claude Code arranca Fase 1 leyendo esta bitácora.
+
 ---
 
 ## 3. Decisiones aparcadas (no se tocan en Fase 0)
