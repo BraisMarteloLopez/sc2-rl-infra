@@ -62,7 +62,7 @@ Documento vivo de decisiones tomadas, restricciones detectadas y decisiones apar
 
 ### 4.1 Banderas abiertas (no bloqueantes ahora, vigilar)
 
-- **numpy 2.2.6 instalado en el env.** PySC2 es de 2019 y numpy 2 eliminó aliases (`np.int`, `np.bool`, `np.float`). Los imports top-level de PySC2 pasan limpios, pero podría romper en runtime al lanzar partidas reales. Si pasa: pin `numpy<2` y reinstalar.
+- **numpy 2.2.6 instalado en el env.** PySC2 es de 2019 y numpy 2 eliminó aliases (`np.int`, `np.bool`, `np.float`). Los imports top-level de PySC2 pasan limpios, pero podría romper en runtime al lanzar partidas reales. Si pasa: pin `numpy<2` y reinstalar. **Actualización 2026-05-21:** el smoke test de MoveToBeacon (1 episodio completo con feature layers) corrió sin `AttributeError`; las observaciones salen como `np.int32` (tipo válido). El camino de minijuego está limpio con numpy 2.2.6. Sigue como bandera abierta solo para full-game y observaciones más pesadas, aún sin probar.
 
 ---
 
@@ -74,14 +74,16 @@ Documento vivo de decisiones tomadas, restricciones detectadas y decisiones apar
 - Versiones decididas y verificadas experimentalmente en Linux/Brais: Python 3.10.20, PySC2 4.0.0, protobuf 3.20.3, grpcio 1.80.0, numpy 2.2.6.
 - Env conda `sc2-rl-infra` creado en Linux/Brais. Imports de PySC2 (`sc2_env`, `actions`, `features`, `colors`) cargan limpios.
 - **SC2 4.10.0 (Base build 75689) instalado en Linux/Brais vía sideload** (procedimiento en §6). PySC2 4.0.0 lo reconoce sin forzar `--version`. El paquete oficial ya incluye los mapas `mini_games`, los Ladder 2017-2019 y Melee, así que **no hizo falta descargar mapas aparte**. Integridad verificada (4115224017 bytes idénticos en origen y destino). Ocupa ~4.3 GB en `~/StarCraftII/`, donde PySC2 lo busca por defecto (no se toca `SC2PATH`).
+- **Smoke test PySC2↔SC2 superado (2026-05-21).** `python -m pysc2.bin.agent --map MoveToBeacon --agent pysc2.agents.random_agent.RandomAgent --norender --max_episodes 1` completó un episodio entero (1920 game steps) sin crashes — cierra el **objetivo #2 de Fase 0** (PySC2 lanza partidas y el agente las recorre). PySC2 guardó un replay solo en `~/StarCraftII/Replays/`. Las líneas de cierre `return code: -15` (SIGTERM) y `unable to parse websocket frame` son el teardown normal, no errores.
+  - Números preliminares (**orientativos, no es el benchmark**; 1 instancia, headless, MoveToBeacon, step_mul=8): arranque en frío ~5,5 s; ~310 agent-steps/s en estado estable.
 
 **Pendiente inmediato:**
-- **Smoke test: validar que PySC2 lanza una partida.** MoveToBeacon + `RandomAgent`, headless (`--norender`), un episodio. Confirma el bucle observación→acción→step sin crashes. Es donde podría aflorar el riesgo de **numpy 2** (§4.1); si pasa, plan B `pip install "numpy<2"`.
+- **Scaffolding del repo + scripts de Fase 0.** `pyproject.toml` (`pip install -e .`), paquete `sc2_rl_infra`, `demo_random_agent` y `benchmark_throughput` (criterios de éxito de `01_PHASE0_infra.md §4`).
 
 **Pendiente Fase 0 (no inmediato):**
 - Ratificar `sudo` no-interactivo cuando lo necesitemos para libs de sistema.
+- **Ejecutar el benchmark de throughput** (objetivo central de Fase 0) en N = {1, 2, 4, 8, 12} hasta el techo de 12 cores; volcar a `RESULTS.md` con la recomendación de N.
 - Congelar el env en `environment.yml` reproducible al cierre de Fase 0.
-- Benchmark de throughput SC2 (objetivo central de Fase 0). Rango N = {1, 2, 4, 8, 12}.
 
 ---
 
