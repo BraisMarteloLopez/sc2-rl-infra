@@ -67,19 +67,27 @@ PySC2 permite elegir cuánta información recibe el agente y cómo actúa, desde
 
 ## 3. Estructura del proyecto
 
-### 3.1 Multi-repo, un repositorio por fase
+### 3.1 Monorepo, organizado por fase
 
-| Fase | Repositorio | Propósito |
+**Decisión revisada al cierre de Fase 0 (2026-05-21):** el plan original era multi-repo (un repo por fase). Se cambia a **monorepo** — todas las fases en `sc2-rl-infra`, organizado por subpaquetes y con un `RESULTS` por fase.
+
+Motivo: Fase 1 reutiliza directamente código de Fase 0 (`parse_replay`, perfiles de interfaz, wrappers, lanzamiento de SC2). Repos separados obligarían a **duplicar** o a extraer `sc2-rl-common` **prematuramente** (el anti-patrón de §3.2). El monorepo lo evita, comparte un solo entorno conda y una sola bitácora, y una **sesión nueva de Claude Code hereda todo el contexto** (NOTES + código) al instante. Multi-repo era overhead de escala corporativa innecesario para un solo desarrollador.
+
+Organización (las carpetas de fases futuras se crean cuando llega su código, no antes):
+
+| Ubicación en `sc2_rl_infra/` | Propósito | Fase |
 |---|---|---|
-| Fase 0 | `sc2-rl-infra` | Entorno, wrappers, benchmarking de throughput |
-| Fase 1 | `sc2-rl-imitation` | Behaviour cloning sobre replays (arquitectura AlphaStar) |
-| Fase 2 | `sc2-rl-offline` | Offline RL al estilo AlphaStar Unplugged |
-| Fase 3 | `sc2-rl-online` | RL online en mini-juegos (PPO/IMPALA) |
-| Fase 4 | `sc2-rl-worldmodels` | (Opcional) DreamerV3 y derivados en mini-juegos |
+| `demo_random_agent`, `benchmark_*`, `parse_replay` | Tooling de entorno y datos (hoy, plano) | 0 |
+| `env/` | Perfiles de interfaz, wrappers, lanzamiento de SC2 (al factorizar lo compartido) | 0/1 |
+| `models/` | Arquitectura AlphaStar (encoders + LSTM + heads autoregresivos) | 1 |
+| `imitation/` | Entrenamiento behaviour cloning | 1 |
+| `offline/`, `online/`, `worldmodels/` | Fases 2/3/4 | 2-4 |
 
-### 3.2 Código compartido entre repositorios
+Cada fase produce su `RESULTS` (Fase 0 → `RESULTS.md`; siguientes → `RESULTS_phaseN.md`). El nombre del paquete `sc2_rl_infra` se mantiene por ahora (renombrar a `sc2_rl` obligaría a reinstalar el editable; opcional en el futuro).
 
-Habrá inevitablemente duplicación de wrappers de observación, encoders básicos y utilidades. Decisión: **aceptar duplicación inicial, refactorizar a librería compartida (`sc2-rl-common`) solo cuando el coste de mantener duplicado supere al coste de extraer**. Anti-patrón a evitar: crear `sc2-rl-common` en Fase 0 sin saber qué será realmente común.
+### 3.2 Código compartido (resuelto por el monorepo)
+
+Con el monorepo desaparece la duplicación entre repos: lo común (env, perfiles de interfaz, parser de replays) vive en módulos del mismo paquete y se importa — ya no hay que decidir cuándo extraer `sc2-rl-common`. Sigue en pie el principio de **no crear abstracciones genéricas especulativas**: un módulo se factoriza a "común" solo cuando dos fases lo usan de verdad, no antes.
 
 ### 3.3 Estado y entregables por fase
 
