@@ -76,13 +76,19 @@ Documento vivo de decisiones tomadas, restricciones detectadas y decisiones apar
 - **SC2 4.10.0 (Base build 75689) instalado en Linux/Brais vía sideload** (procedimiento en §6). PySC2 4.0.0 lo reconoce sin forzar `--version`. El paquete oficial ya incluye los mapas `mini_games`, los Ladder 2017-2019 y Melee, así que **no hizo falta descargar mapas aparte**. Integridad verificada (4115224017 bytes idénticos en origen y destino). Ocupa ~4.3 GB en `~/StarCraftII/`, donde PySC2 lo busca por defecto (no se toca `SC2PATH`).
 - **Smoke test PySC2↔SC2 superado (2026-05-21).** `python -m pysc2.bin.agent --map MoveToBeacon --agent pysc2.agents.random_agent.RandomAgent --norender --max_episodes 1` completó un episodio entero (1920 game steps) sin crashes — cierra el **objetivo #2 de Fase 0** (PySC2 lanza partidas y el agente las recorre). PySC2 guardó un replay solo en `~/StarCraftII/Replays/`. Las líneas de cierre `return code: -15` (SIGTERM) y `unable to parse websocket frame` son el teardown normal, no errores.
   - Números preliminares (**orientativos, no es el benchmark**; 1 instancia, headless, MoveToBeacon, step_mul=8): arranque en frío ~5,5 s; ~310 agent-steps/s en estado estable.
+- **Scaffolding instalado y validado en Brais (2026-05-21).** `pip install -e .` OK; `python -m sc2_rl_infra.demo_random_agent` y `benchmark_throughput` corren end-to-end. El repo se clonó desde GitHub a `~/sc2-rl-infra` (paralelo a `~/StarCraftII/`); actualización vía script `pull_sc2.sh` local.
+- **Benchmark de throughput — 1 instancia (incremento 1), medición controlada (2000 steps, `no_op`):**
+  - Lanzamiento de SC2: **~5,4 s/instancia** (coste de arranque, métrica §7). Reset de episodio: **~17 ms** (barato; el coste real es lanzar el proceso, no resetear).
+  - Throughput: **~210 agent-steps/s** (~1700 game-loops/s ≈ 76× tiempo real), MoveToBeacon headless, step_mul=8.
+  - Coste del **raw interface** (`use_feature_units`): **~4%** (212→204 steps/s). Pequeño.
+  - **Corrige el ~310 "orientativo" de arriba**: era un run corto y ruidoso; el número fiable es ~210. Justifica medir en serio en vez de fiarse de un run suelto.
 
 **Pendiente inmediato:**
-- **Scaffolding del repo + scripts de Fase 0.** `pyproject.toml` (`pip install -e .`), paquete `sc2_rl_infra`, `demo_random_agent` y `benchmark_throughput` (criterios de éxito de `01_PHASE0_infra.md §4`).
+- **Benchmark incremento 2: N instancias en paralelo** (multiprocessing), barrido N = {1, 2, 4, 8, 12} hasta el techo de 12 cores, throughput agregado + uso de CPU. Es el dato que cierra Fase 0.
 
 **Pendiente Fase 0 (no inmediato):**
 - Ratificar `sudo` no-interactivo cuando lo necesitemos para libs de sistema.
-- **Ejecutar el benchmark de throughput** (objetivo central de Fase 0) en N = {1, 2, 4, 8, 12} hasta el techo de 12 cores; volcar a `RESULTS.md` con la recomendación de N.
+- Volcar resultados del benchmark a `RESULTS.md` con la recomendación explícita de N para fases siguientes.
 - Congelar el env en `environment.yml` reproducible al cierre de Fase 0.
 
 ---
