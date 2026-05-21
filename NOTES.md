@@ -84,11 +84,12 @@ Documento vivo de decisiones tomadas, restricciones detectadas y decisiones apar
   - **Corrige el ~310 "orientativo" de arriba**: era un run corto y ruidoso; el número fiable es ~210. Justifica medir en serio en vez de fiarse de un run suelto.
 
 **Pendiente inmediato:**
-- **Benchmark incremento 2: N instancias en paralelo** (multiprocessing), barrido N = {1, 2, 4, 8, 12} hasta el techo de 12 cores, throughput agregado + uso de CPU. Es el dato que cierra Fase 0.
+- **Benchmark de throughput — barrido en paralelo (incremento 2): HECHO.** N={1,2,4,8,12} instancias, un proceso por instancia. El agregado escala ~lineal hasta 12: **~4744 agent-steps/s a N=12** (CPU 93%, 0 fallos). Hallazgo: la "eficiencia" aparente >100% es artefacto del governor **`schedutil`** (1 instancia corre a ~1.4 GHz; bajo carga, boost a ~2.7-3.7 GHz → ~395/s por instancia). Resultados completos y recomendación en `RESULTS.md`.
+- **`RESULTS.md` escrito** con tabla de throughput, el artefacto de frecuencia y la recomendación de N (**default N=8**: ~2766 steps/s al 65% de CPU, deja margen para el entrenamiento de Fase 1).
 
-**Pendiente Fase 0 (no inmediato):**
+**Pendiente Fase 0 (queda solo esto para cerrar):**
+- **Dataset de replays** (criterio de éxito #3 de `01_PHASE0_infra.md §4`): ≥100 descargados, ≥1 parseado. Vive en el mismo CDN de Akamai bloqueado → sideload, como el binario.
 - Ratificar `sudo` no-interactivo cuando lo necesitemos para libs de sistema.
-- Volcar resultados del benchmark a `RESULTS.md` con la recomendación explícita de N para fases siguientes.
 - Congelar el env en `environment.yml` reproducible al cierre de Fase 0.
 
 ---
