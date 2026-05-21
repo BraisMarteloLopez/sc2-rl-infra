@@ -27,7 +27,7 @@ Razones secundarias:
 1. SC2 headless instalado y funcional en la máquina objetivo.
 2. PySC2 instalado, comunicándose con SC2, capaz de lanzar partidas mini-juego y full game.
 3. Métricas de throughput documentadas: steps/segundo en una instancia, en N instancias paralelas, con y sin renderizado.
-4. Wrappers básicos de observación (espacial + entidades) y acción (estructura jerárquica) implementados y testeados.
+4. Wrappers básicos de observación (espacial + entidades) y acción (estructura jerárquica) — **diseño definido, construcción diferida a Fase 1** (cuando la arquitectura los consume; no especulativamente en Fase 0, ver §5). Serán conscientes del **perfil de interfaz** (`full` / `human`, ver `00_OVERVIEW.md §2.4`).
 5. Agente random capaz de jugar mini-juegos y partidas full game (perdiendo, pero sin crashes).
 6. Acceso confirmado al dataset de replays de Blizzard, formato entendido, scripts de parseo básicos funcionando.
 

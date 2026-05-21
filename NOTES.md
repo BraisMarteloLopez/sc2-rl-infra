@@ -46,6 +46,7 @@ Documento vivo de decisiones tomadas, restricciones detectadas y decisiones apar
 - **Mini-juego de referencia del benchmark.** El plan menciona `MoveToBeacon` en §7; pendiente ratificar formalmente.
 - **Definición concreta de "full game PvP" en el benchmark** (random vs random, random vs built-in, etc.). Pendiente.
 - **Mapa principal del proyecto.** Diferido al final de Fase 0/1 según disponibilidad real de replays.
+- **Perfil de interfaz — detalles concretos.** Convención decidida (`full` / `human` + ablaciones, ver `00_OVERVIEW.md §2.4`); el wrapper se construye en Fase 1. Por ratificar al inicio de Fase 1: la interfaz de cámara exacta (estilo AlphaStar), resolución de feature layers, modelo de APM/retardo, qué ablaciones (sin minimapa, cuadrante fijo), y si `human` expone las entidades propias vía `use_raw_units` (AlphaStar veía una lista de entidades) o solo feature layers.
 
 ---
 

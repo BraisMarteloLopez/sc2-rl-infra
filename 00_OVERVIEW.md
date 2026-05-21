@@ -53,6 +53,16 @@ Para reducir el espacio de variables y mantener los experimentos comparables ent
 
 Estas decisiones se revisan al final de Fase 1 si hay evidencia experimental para cambiarlas.
 
+### 2.4 Perfil de interfaz (observación y acción)
+
+PySC2 permite elegir cuánta información recibe el agente y cómo actúa, desde una "API completa" (ve y ordena en todo el mapa al instante) hasta una interfaz limitada por cámara, parecida a la experiencia humana. La elección afecta a la **fidelidad respecto a AlphaStar** y al **throughput**, y debe ser comparable entre fases, así que se fija como convención del proyecto:
+
+- **`full`** (baseline / máximo throughput): interfaz raw — lista de todas las unidades y acciones sobre cualquier punto del mapa, sin mover cámara. Referencia y techo de rendimiento. **No** representa a un humano.
+- **`human`** (fidelidad AlphaStar): interfaz de cámara + feature layers — detalle solo bajo la cámara, minimapa grueso, niebla de guerra activa; para actuar lejos hay que mover la cámara. Es el perfil con el que jugó AlphaStar.
+- **Ablaciones** (experimentos, no fidelidad): variantes más restrictivas que un humano (sin minimapa, cámara fija a un cuadrante, límite de APM/retardo) para medir cuánto degrada al agente quitarle información.
+
+**Decisión:** el behaviour cloning y el RL con pretensión de fidelidad (Fases 1-3) usan `human`; `full` queda como baseline y herramienta de benchmarking. Se materializa como wrapper de observación/acción **cuando se use por primera vez (Fase 1)**, no antes (ver `01_PHASE0_infra.md §5`). Detalles concretos por ratificar en `NOTES.md §3`.
+
 ---
 
 ## 3. Estructura del proyecto
