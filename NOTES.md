@@ -84,14 +84,14 @@ Documento vivo de decisiones tomadas, restricciones detectadas y decisiones apar
   - Coste del **raw interface** (`use_feature_units`): **~4%** (212→204 steps/s). Pequeño.
   - **Corrige el ~310 "orientativo" de arriba**: era un run corto y ruidoso; el número fiable es ~210. Justifica medir en serio en vez de fiarse de un run suelto.
 
-**Pendiente inmediato:**
 - **Benchmark de throughput — barrido en paralelo (incremento 2): HECHO.** N={1,2,4,8,12} instancias, un proceso por instancia. El agregado escala ~lineal hasta 12: **~4744 agent-steps/s a N=12** (CPU 93%, 0 fallos). Hallazgo: la "eficiencia" aparente >100% es artefacto del governor **`schedutil`** (1 instancia corre a ~1.4 GHz; bajo carga, boost a ~2.7-3.7 GHz → ~395/s por instancia). Resultados completos y recomendación en `RESULTS.md`.
 - **`RESULTS.md` escrito** con tabla de throughput, el artefacto de frecuencia y la recomendación de N (**default N=8**: ~2766 steps/s al 65% de CPU, deja margen para el entrenamiento de Fase 1).
+- **Pipeline de datos validado.** `parse_replay` abre un replay, lo recorre y extrae observaciones (feature layers + estado: `feature_screen`, `feature_minimap`, `available_actions`, `player`…) y acciones del jugador. Probado en un replay 4.10 (240 observaciones, 158 acciones). Fix necesario: pasar `map_data` explícito (SC2 buscaba `maps/` y el dir real es `Maps/` — case-sensitivity en Linux).
+- **Entorno congelado en `environment.yml`** (freeze del 2026-05-21; recrear con `conda env create -f environment.yml` + `pip install -e . --no-deps`).
 
-**Pendiente Fase 0 (queda solo esto para cerrar):**
-- **Dataset de replays** (criterio de éxito #3 de `01_PHASE0_infra.md §4`): ≥100 descargados, ≥1 parseado. Vive en el mismo CDN de Akamai bloqueado → sideload, como el binario.
-- Ratificar `sudo` no-interactivo cuando lo necesitemos para libs de sistema.
-- Congelar el env en `environment.yml` reproducible al cierre de Fase 0.
+**Fase 0: CERRADA (2026-05-21).** Throughput medido y pipeline de datos demostrado; suficiente para proceder a Fase 1. Único pendiente, **diferido conscientemente a Fase 1** (decisión B):
+- **Adquisición del dataset humano** (≥100 replays, parsear ≥1 humano): el *parser* ya está validado; falta *bajar los datos*. Se decide en Fase 1 entre packs 3.16.1 (sideload + instalar SC2 3.16.1) y AlphaStar Unplugged (4.8.2+). Es la primera tarea de Fase 1.
+- (Menor) Ratificar `sudo` no-interactivo si hace falta para libs de sistema.
 
 ---
 
