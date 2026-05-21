@@ -51,6 +51,12 @@ def _worker(idx, duration, map_name, step_mul, screen, minimap, use_feature_unit
         from pysc2.env import sc2_env
         from pysc2.lib import actions, features
 
+        # Los procesos hijos (spawn) no parsean flags, pero pysc2 lee FLAGS.sc2_run_config
+        # internamente al crear el SC2Env -> UnparsedFlagAccessError. Marcamos los flags como
+        # parseados (toman sus defaults, que es lo que necesita pysc2). El worker no usa FLAGS
+        # para sus propios parámetros: van por argumentos.
+        flags.FLAGS.mark_as_parsed()
+
         no_op = actions.FUNCTIONS.no_op()
         aif = features.AgentInterfaceFormat(
             feature_dimensions=features.Dimensions(screen=screen, minimap=minimap),
