@@ -84,7 +84,7 @@ Lista explícita para evitar scope creep:
 
 - Steps/segundo con 1 instancia, sin renderizado, mini-juego MoveToBeacon.
 - Steps/segundo con 1 instancia, full game PvP, sin renderizado.
-- Steps/segundo total con N instancias paralelas (N a determinar empíricamente: 1, 2, 4, 8, 16).
+- Steps/segundo total con N instancias paralelas (N a determinar empíricamente: 1, 2, 4, 8, 12 — techo de 12 por el cpuset del contenedor LXC, ver NOTES §4).
 - Utilización media de CPU y RAM con N óptimo.
 - Utilización de GPU (debería ser casi cero en esta fase; si no, hay un bug).
 - Tiempo medio de inicio de una instancia de SC2 (relevante para fases con muchos resets).
