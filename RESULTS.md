@@ -87,13 +87,25 @@ Como en Fase 1+ los envs comparten máquina con el entrenamiento, conviene empez
 
 ---
 
-## 8. Estado de Fase 0
+## 8. Estado de Fase 0 (CERRADA — 2026-05-21)
 
 - [x] SC2 headless instalado y funcional.
 - [x] PySC2 lanza partidas; agente random juega (objetivo #2).
 - [x] Throughput medido y documentado; recomendación de N.
 - [x] `demo_random_agent` y `benchmark_*` reproducibles (`pip install -e .`).
-- [ ] **Dataset de replays** (≥100 descargados, ≥1 parseado) — pendiente; mismo bloqueo de Akamai → sideload.
-- [ ] Congelar el env en `environment.yml`.
+- [x] **Pipeline de datos validado:** `parse_replay` abre un replay, lo recorre y extrae observaciones (feature layers + estado) y acciones del jugador. Probado en un replay 4.10 (240 observaciones, 158 acciones).
+- [x] Entorno congelado en `environment.yml`.
+- [~] **Dataset humano** (≥100 descargados, ≥1 parseado): el *parser* está validado, pero la *adquisición* del dataset se **difiere a Fase 1** (decisión consciente — ver §9), que es quien lo consume y donde se elige el dataset.
 
-**Decisión: throughput suficiente para proceder a Fase 1.** Único bloqueante restante de Fase 0: acceso al dataset de replays.
+**Decisión: Fase 0 cerrada.** Throughput suficiente y pipeline de datos demostrado para proceder a Fase 1. El único pendiente (adquisición del dataset humano) es la primera tarea de Fase 1.
+
+---
+
+## 9. Puente a Fase 1: adquisición del dataset
+
+Primera tarea de Fase 1, a decidir entre:
+
+- **Packs 3.16.1 de Blizzard** (documentados en s2client-proto): accesibles por sideload (mismo CDN de Akamai bloqueado), pero requieren **instalar también SC2 3.16.1** (un replay solo se parsea con su versión exacta de SC2). Replays de 2017.
+- **AlphaStar Unplugged** (4.8.2+): el dataset *fiel* a la referencia (Mathieu 2023); acceso más pesado. Es la referencia formal de Fase 2.
+
+El parser (`parse_replay`) ya está listo para ambos una vez resuelto el acceso y la versión de SC2 correspondiente. **Convención de raza/matchup** (`00_OVERVIEW §2.3`): priorizar replays Protoss vs Protoss al filtrar el dataset.
