@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Entornos virtuales
+.venv/
+venv/
+
+# Artefactos / datos pesados de SC2 (no van a git)
+SC2*.zip
+*.SC2Replay
+Replays/
+
+# Sistema
+.DS_Store

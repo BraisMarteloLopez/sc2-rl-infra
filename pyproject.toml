@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sc2-rl-infra"
+version = "0.0.1"
+description = "Infraestructura y benchmarking del entorno SC2/PySC2 para RL (Fase 0)"
+readme = "NOTES.md"
+# Python 3.10 obligatorio: 3.11 rompe pysc2 (random.shuffle con randfunc). Ver NOTES.md §4.
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "pysc2==4.0.0",
+    # protobuf<4 obligatorio: s2clientprotocol trae _pb2 pre-4.21. Ver NOTES.md §4.
+    "protobuf<4",
+    "numpy",
+    "absl-py",
+]
+
+[tool.setuptools]
+packages = ["sc2_rl_infra"]
