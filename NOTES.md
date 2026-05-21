@@ -2,7 +2,7 @@
 
 Documento vivo de decisiones tomadas, restricciones detectadas y decisiones aparcadas durante Fase 0.
 
-Última actualización: 2026-05-13.
+Última actualización: 2026-05-21.
 
 ---
 
@@ -73,11 +73,28 @@ Documento vivo de decisiones tomadas, restricciones detectadas y decisiones apar
 - Fase 0 íntegramente en Linux/Brais (§2.1).
 - Versiones decididas y verificadas experimentalmente en Linux/Brais: Python 3.10.20, PySC2 4.0.0, protobuf 3.20.3, grpcio 1.80.0, numpy 2.2.6.
 - Env conda `sc2-rl-infra` creado en Linux/Brais. Imports de PySC2 (`sc2_env`, `actions`, `features`, `colors`) cargan limpios.
+- **SC2 4.10.0 (Base build 75689) instalado en Linux/Brais vía sideload** (procedimiento en §6). PySC2 4.0.0 lo reconoce sin forzar `--version`. El paquete oficial ya incluye los mapas `mini_games`, los Ladder 2017-2019 y Melee, así que **no hizo falta descargar mapas aparte**. Integridad verificada (4115224017 bytes idénticos en origen y destino). Ocupa ~4.3 GB en `~/StarCraftII/`, donde PySC2 lo busca por defecto (no se toca `SC2PATH`).
 
 **Pendiente inmediato:**
-- **Acción 6 — Instalar SC2 Linux 4.10.0 vía sideload** (egress directo a Akamai desde Brais bloqueado; descarga en laptop externa y `scp` a Brais). Comandos en el chat de continuación.
+- **Smoke test: validar que PySC2 lanza una partida.** MoveToBeacon + `RandomAgent`, headless (`--norender`), un episodio. Confirma el bucle observación→acción→step sin crashes. Es donde podría aflorar el riesgo de **numpy 2** (§4.1); si pasa, plan B `pip install "numpy<2"`.
 
 **Pendiente Fase 0 (no inmediato):**
 - Ratificar `sudo` no-interactivo cuando lo necesitemos para libs de sistema.
 - Congelar el env en `environment.yml` reproducible al cierre de Fase 0.
 - Benchmark de throughput SC2 (objetivo central de Fase 0). Rango N = {1, 2, 4, 8, 12}.
+
+---
+
+## 6. Sideload de SC2 que funcionó (reproducible)
+
+El egress directo a Akamai desde Brais está bloqueado (§4), así que el binario se descarga fuera y se transfiere. Procedimiento confirmado el 2026-05-21:
+
+1. **Descarga** en una máquina con salida a Akamai (aquí Windows 11 / PowerShell). El `--connect-timeout` es clave: si esa red también tuviera el bloqueo, falla en 20 s en vez de colgarse indefinidamente.
+   ```powershell
+   curl.exe -L -C - --connect-timeout 20 --retry 3 -o "$HOME\Downloads\SC2.4.10.zip" "https://blzdistsc2-a.akamaihd.net/Linux/SC2.4.10.zip"
+   ```
+2. **Transferencia** a Brais por `scp` (~3.9 GB): `scp SC2.4.10.zip master@<brais>:~/SC2_A/`
+3. **Integridad** por tamaño en bytes (debe coincidir origen/destino): `stat -c %s SC2.4.10.zip` → `4115224017`.
+4. **Descompresión** (zip cifrado; contraseña oficial de Blizzard `iagreetotheeula`): `unzip -P iagreetotheeula ~/SC2_A/SC2.4.10.zip -d ~/` → crea `~/StarCraftII/`.
+
+**Post-mortem del cuelgue del 2026-05-13:** la sesión anterior se colgó durante la Acción 6 al intentar descargar el binario *directamente desde Brais*; el egress a Akamai da timeout silencioso indefinido y la sesión esperó sin fin. No dejó corrupción en disco — el env conda y el repo sobrevivieron intactos. Lección aplicada arriba: descargar fuera con timeout corto y transferir.
