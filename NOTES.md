@@ -2,7 +2,7 @@
 
 Documento vivo de decisiones tomadas, restricciones detectadas y decisiones aparcadas durante Fase 0.
 
-Última actualización: 2026-05-21.
+Última actualización: 2026-05-25.
 
 ---
 
@@ -110,3 +110,17 @@ El egress directo a Akamai desde Brais está bloqueado (§4), así que el binari
 4. **Descompresión** (zip cifrado; contraseña oficial de Blizzard `iagreetotheeula`): `unzip -P iagreetotheeula ~/SC2_A/SC2.4.10.zip -d ~/` → crea `~/StarCraftII/`.
 
 **Post-mortem del cuelgue del 2026-05-13:** la sesión anterior se colgó durante la Acción 6 al intentar descargar el binario *directamente desde Brais*; el egress a Akamai da timeout silencioso indefinido y la sesión esperó sin fin. No dejó corrupción en disco — el env conda y el repo sobrevivieron intactos. Lección aplicada arriba: descargar fuera con timeout corto y transferir.
+
+---
+
+## 7. Visualización remota (Brais headless → Windows local)
+
+**Contexto (2026-05-25).** Brais es headless (LXC sin monitor; GPU en slice MIG de cómputo). Se trabaja por SSH desde Windows y se quiere ver la salida gráfica (visor de feature layers de PySC2, replays) en el Windows local. La regla de versión sigue intacta: **SC2 corre siempre en Brais** con su build (4.10 hoy; 3.16.1 cuando se sideload-een los packs) y a Windows solo le llega el *resultado* — **nunca se ejecuta SC2 en Windows**.
+
+Tres vías evaluadas:
+
+- **A — Vídeo a fichero.** Brais renderiza a mp4 y `scp` a Windows. La más simple, sin GUI remota ni lag; no interactiva. Buena para clips sueltos.
+- **B — Streaming en vivo por VNC (elegida ahora).** Servidor VNC + pantalla virtual (Xvfb/Xvnc) en Brais; túnel SSH (`ssh -L`); visor VNC en Windows. Interactiva y reutilizable para ver agentes en directo (Fases 1+). Coste: instalar VNC + WM mínimo en el contenedor (requiere `sudo`).
+- **C — Datos a Windows (alternativa viable, aparcada).** Brais extrae las feature layers a `.npz`; `scp`; se animan/inspeccionan con numpy+matplotlib en Windows, **sin SC2 en Windows**. Interactiva, 100% local e inmune a la regla de versión (solo son arrays). Ideal para depurar fotograma a fotograma. No reproduce la vista oficial coloreada de PySC2 (la dibujamos nosotros). El extractor reutilizaría la lógica de carga de `parse_replay` añadiendo el guardado de `feature_screen`/`feature_minimap`.
+
+**Decisión:** **B ahora** (visión en vivo). **C** queda documentada como alternativa viable, preferente cuando interese inspección local interactiva de los datos; **A** para vídeos puntuales.
