@@ -137,8 +137,15 @@ def draw(screen, font, panels, observation, header, cell):
 def main(unused_argv):
     panels = resolve_layers(FLAGS.layers)
 
+    # En headless, las importaciones (pysc2) pueden dejar SDL con un driver de
+    # vídeo invisible ('dummy'/offscreen): el bucle corre pero no abre ventana.
+    # Forzamos x11 y reiniciamos el subsistema para que pygame lo relea y pinte
+    # de verdad en el display X (:1) del VNC.
+    os.environ["SDL_VIDEODRIVER"] = "x11"
+    pygame.display.quit()
     pygame.display.init()
     pygame.font.init()
+    print(f"[live_view] SDL video driver = {pygame.display.get_driver()}")
     screen = pygame.display.set_mode(window_size(len(panels), FLAGS.cell))  # SIN OPENGL
     pygame.display.set_caption("sc2-rl-infra · visor de feature layers (software)")
     font = pygame.font.Font(None, LABEL_H)
