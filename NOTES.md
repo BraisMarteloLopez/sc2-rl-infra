@@ -123,4 +123,35 @@ Tres vías evaluadas:
 - **B — Streaming en vivo por VNC (elegida ahora).** Servidor VNC + pantalla virtual (Xvfb/Xvnc) en Brais; túnel SSH (`ssh -L`); visor VNC en Windows. Interactiva y reutilizable para ver agentes en directo (Fases 1+). Coste: instalar VNC + WM mínimo en el contenedor (requiere `sudo`).
 - **C — Datos a Windows (alternativa viable, aparcada).** Brais extrae las feature layers a `.npz`; `scp`; se animan/inspeccionan con numpy+matplotlib en Windows, **sin SC2 en Windows**. Interactiva, 100% local e inmune a la regla de versión (solo son arrays). Ideal para depurar fotograma a fotograma. No reproduce la vista oficial coloreada de PySC2 (la dibujamos nosotros). El extractor reutilizaría la lógica de carga de `parse_replay` añadiendo el guardado de `feature_screen`/`feature_minimap`.
 
-**Decisión:** **B ahora** (visión en vivo). **C** queda documentada como alternativa viable, preferente cuando interese inspección local interactiva de los datos; **A** para vídeos puntuales.
+**Decisión:** **B ahora** (visión en vivo). **C** queda documentada como alternativa viable, preferente cuando interese inspección local interactiva de los datos; **A** para vídeos puntuales. Implementación y receta reproducible en §7.1.
+
+### 7.1. Implementación de B — lo que funcionó (reproducible, 2026-05-26)
+
+B quedó **operativa**: se ve un agente en directo sobre VNC. Pero **no** con el visor oficial de PySC2 (callejón sin salida, ver abajo) — la vista la dibujamos nosotros por software.
+
+**Montaje VNC (Brais).** TigerVNC + fluxbox, servidor solo en loopback; el túnel lo hace MobaXterm como *SSH gateway (jump host)*. Script: `tools/vnc.sh {start|stop|status|restart}` (crea `~/.vnc/xstartup` con fluxbox si falta).
+
+```
+tools/vnc.sh start          # vncserver :1 -geometry 1600x900 -localhost yes
+```
+
+Detalle clave del cliente: como el servidor escucha solo en `127.0.0.1`, en MobaXterm el host VNC es `localhost:5901` y se entra por el *SSH gateway* a Brais. Ir directo a la IP de Brais:5901 falla ("cannot reach host on port 5901").
+
+**Callejón sin salida — el visor GL de PySC2.** `pysc2.bin.agent --render` y `SC2Env(visualize=True)` **revientan sobre VNC**:
+
+```
+pygame.error: Could not make GL context current: BadAccess          (GLX)
+pygame.error: ... eglMakeCurrent failed ... EGL_BAD_ACCESS          (con SDL_VIDEO_X11_FORCE_EGL=1)
+```
+
+Causa: el renderer humano crea el contexto OpenGL en el hilo principal y lo usa desde un hilo de render; Mesa software (llvmpipe) aplica de forma estricta la regla "un contexto GL solo activo en un hilo a la vez" → `BAD_ACCESS`. Los drivers NVIDIA son laxos con eso (por eso a otros les funciona); llvmpipe no. **No lo arreglan**: ninguna variable de entorno (GLX ni EGL), ni reiniciar el VNC, ni instalar `libgl1-mesa-dri`/`mesa-utils` (llvmpipe da `direct rendering: Yes`, pero el problema es de hilos, no del driver). **VirtualGL** tampoco vale aquí: la GPU está en **MIG de cómputo** y NVIDIA deshabilita OpenGL/Vulkan bajo MIG. Y el binario Linux de SC2 ni soporta el render RGB oficial (`Creating stub renderer...`), solo feature layers.
+
+**Solución que funciona — visor propio por software.** `sc2_rl_infra/live_view.py`: corre el agente con `visualize=False` (no toca el renderer GL) y pinta las feature layers en una ventana **pygame de software (sin OpenGL), un solo hilo**, reutilizando la paleta oficial de PySC2. Esquiva el muro por completo y no necesita GPU gráfica.
+
+```
+tools/vnc.sh start
+DISPLAY=:1 python -m sc2_rl_infra.live_view
+DISPLAY=:1 python -m sc2_rl_infra.live_view --map CollectMineralShards --step_mul 4 --fps 30
+```
+
+Gotcha imprescindible: al importar pysc2 en headless, SDL queda con un driver de vídeo invisible (`dummy`); `live_view.py` fuerza `SDL_VIDEODRIVER=x11` y reinicia el subsistema antes de abrir la ventana (si no, el bucle corre pero no aparece nada). Al arrancar imprime `[live_view] SDL video driver = x11`.
