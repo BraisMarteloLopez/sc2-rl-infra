@@ -11,20 +11,25 @@ Los gráficos RGB "reales" del juego se descartaron en Brais (GPU en MIG sin EGL
 OSMesa moderna no carga en el binario de 2019; NOTES §7.2). Para la cinemática:
 `--save_replay` y abre el `.SC2Replay` en el cliente de SC2 de Windows (NOTES §7.3).
 
+Por defecto conduce un agente aleatorio; con --agent puedes pasar otro: un scripted
+de PySC2 (p.ej. pysc2.agents.scripted_agent.MoveToBeacon, que SÍ resuelve el mapa) o,
+en fases siguientes, tu agente entrenado.
+
 Uso (en Brais, env `sc2-rl-infra` activo, VNC en :1 — ver tools/vnc.sh):
     DISPLAY=:1 python -m sc2_rl_infra.live_view
+    DISPLAY=:1 python -m sc2_rl_infra.live_view --agent pysc2.agents.scripted_agent.MoveToBeacon
     DISPLAY=:1 python -m sc2_rl_infra.live_view --map CollectMineralShards --step_mul 4 --fps 30
     DISPLAY=:1 python -m sc2_rl_infra.live_view --save_replay     # guarda el .SC2Replay
 
 Cierra la ventana (o Esc/Q) para detener.
 """
 
+import importlib
 import math
 import os
 
 import numpy as np
 from absl import app, flags
-from pysc2.agents import random_agent
 from pysc2.env import sc2_env
 from pysc2.lib import features
 
@@ -34,6 +39,8 @@ import pygame  # noqa: E402  (tras fijar SDL_AUDIODRIVER)
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string("map", "MoveToBeacon", "Minijuego PySC2 a jugar.")
+flags.DEFINE_string("agent", "pysc2.agents.random_agent.RandomAgent",
+                    "Agente a conducir, como 'módulo.Clase'. Ej: pysc2.agents.scripted_agent.MoveToBeacon.")
 flags.DEFINE_integer("episodes", 3, "Número de episodios a jugar.")
 flags.DEFINE_integer("step_mul", 8, "Game steps por cada agent step (menor = más fluido).")
 flags.DEFINE_integer("screen", 84, "Resolución (px) de las feature layers de pantalla.")
@@ -136,6 +143,12 @@ def draw(screen, font, panels, observation, header, cell):
     pygame.display.flip()
 
 
+def load_agent(path):
+    """Importa e instancia un agente desde una ruta 'módulo.Clase'."""
+    module_name, cls_name = path.rsplit(".", 1)
+    return getattr(importlib.import_module(module_name), cls_name)()
+
+
 def main(unused_argv):
     panels = resolve_layers(FLAGS.layers)
 
@@ -155,7 +168,7 @@ def main(unused_argv):
     screen.blit(font.render("Lanzando SC2...", True, FG), (MARGIN, MARGIN))
     pygame.display.flip()
 
-    agent = random_agent.RandomAgent()
+    agent = load_agent(FLAGS.agent)
     with sc2_env.SC2Env(
         map_name=FLAGS.map,
         players=[sc2_env.Agent(sc2_env.Race.random)],

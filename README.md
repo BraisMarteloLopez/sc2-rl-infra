@@ -133,9 +133,10 @@ vncpasswd
 tools/vnc.sh start            # | stop | status | restart  (vars: VNC_DISPLAY, VNC_GEOMETRY)
 
 # Visor (DISPLAY=:1 obligatorio):
-DISPLAY=:1 python -m sc2_rl_infra.live_view
+DISPLAY=:1 python -m sc2_rl_infra.live_view                                              # agente aleatorio (baseline)
+DISPLAY=:1 python -m sc2_rl_infra.live_view --agent pysc2.agents.scripted_agent.MoveToBeacon  # agente que SÍ resuelve el mapa
 DISPLAY=:1 python -m sc2_rl_infra.live_view --map CollectMineralShards --step_mul 4 --fps 30
-# flags: --map --episodes --step_mul --screen --minimap --max_steps --fps --cell --layers --save_replay --replay_dir
+# flags: --agent --map --episodes --step_mul --screen --minimap --max_steps --fps --cell --layers --save_replay --replay_dir
 ```
 **MobaXterm (cliente VNC en Windows):** sesión VNC → host `localhost:5901`; en *Network settings* activar *Connect through SSH gateway (jump host)* apuntando a Brais (el servidor solo escucha en loopback).
 
@@ -144,6 +145,16 @@ DISPLAY=:1 python -m sc2_rl_infra.live_view --map CollectMineralShards --step_mu
 DISPLAY=:1 python -m sc2_rl_infra.live_view --save_replay --episodes 1   # → ~/StarCraftII/Replays/sc2-rl-infra/
 ```
 El `.SC2Replay` es el artefacto portátil. Para verlo con **gráficos reales**: copiarlo a Windows (`scp` o SFTP de MobaXterm) y abrirlo en el cliente de SC2 (misma versión que lo grabó). Ver `NOTES §7.3`.
+
+### Entrenamiento en vivo (spike de Fase 3)
+
+Un A2C mínimo (PyTorch, FullyConv) que **aprende** MoveToBeacon mientras lo ves entrenar en el visor (el reward medio sube en la cabecera). Es un anticipo de Fase 3, no sustituye al plan. Requiere PyTorch (la red es minúscula; CPU basta):
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+DISPLAY=:1 python -m sc2_rl_infra.online.a2c_beacon
+# flags: --updates --nsteps --lr --gamma --entropy --value_coef --max_grad_norm --screen --minimap --step_mul --fps --cell --device
+```
+RL es quisquilloso: si el reward se queda plano, prueba `--entropy 0.01` (más exploración) o `--lr 3e-4`.
 
 ---
 
