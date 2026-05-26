@@ -56,6 +56,7 @@ flags.DEFINE_bool("rgb", False, "Mostrar el render RGB real del juego en vez de 
 flags.DEFINE_integer("rgb_screen", 256, "Resolución (px) del render RGB de pantalla.")
 flags.DEFINE_integer("rgb_minimap", 64, "Resolución (px) del render RGB de minimapa.")
 flags.DEFINE_string("record", "", "Si se indica, graba la ventana a este .mp4 (necesita imageio-ffmpeg).")
+flags.DEFINE_bool("force_osmesa", True, "En modo --rgb, forzar OSMesa quitando EGL de los renderers de PySC2 (EGL no funciona bajo MIG).")
 
 COLS = 2
 MARGIN = 8
@@ -153,6 +154,20 @@ def draw(screen, font, items, header, cell):
     pygame.display.flip()
 
 
+def force_osmesa_renderer():
+    """Quita EGL de la lista de renderers de PySC2 para que SC2 use OSMesa (software).
+
+    EGL falla bajo MIG ("Failed to create a valid EGL display! Devices tried: 0"),
+    así que dejamos solo las entradas -osmesapath de `known_gl_libs`.
+    """
+    from pysc2 import run_configs
+    rc_cls = type(run_configs.get())
+    libs = getattr(rc_cls, "known_gl_libs", None)
+    if libs:
+        rc_cls.known_gl_libs = [entry for entry in libs if entry[0] != "-eglpath"]
+        print(f"[live_view] renderers tras forzar OSMesa: {rc_cls.known_gl_libs}")
+
+
 def make_interface_format():
     if FLAGS.rgb:
         # Solo RGB: con un único espacio, PySC2 infiere el action_space (no hace
@@ -191,6 +206,9 @@ def main(unused_argv):
     if FLAGS.record:
         import imageio
         writer = imageio.get_writer(FLAGS.record, fps=FLAGS.fps, macro_block_size=1)
+
+    if FLAGS.rgb and FLAGS.force_osmesa:
+        force_osmesa_renderer()
 
     agent = random_agent.RandomAgent()
     try:
