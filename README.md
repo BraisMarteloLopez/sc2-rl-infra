@@ -133,9 +133,10 @@ vncpasswd
 tools/vnc.sh start            # | stop | status | restart  (vars: VNC_DISPLAY, VNC_GEOMETRY)
 
 # Visor (DISPLAY=:1 obligatorio):
-DISPLAY=:1 python -m sc2_rl_infra.live_view
+DISPLAY=:1 python -m sc2_rl_infra.live_view                                              # agente aleatorio (baseline)
+DISPLAY=:1 python -m sc2_rl_infra.live_view --agent pysc2.agents.scripted_agent.MoveToBeacon  # agente que SÍ resuelve el mapa
 DISPLAY=:1 python -m sc2_rl_infra.live_view --map CollectMineralShards --step_mul 4 --fps 30
-# flags: --map --episodes --step_mul --screen --minimap --max_steps --fps --cell --layers --save_replay --replay_dir
+# flags: --agent --map --episodes --step_mul --screen --minimap --max_steps --fps --cell --layers --save_replay --replay_dir
 ```
 **MobaXterm (cliente VNC en Windows):** sesión VNC → host `localhost:5901`; en *Network settings* activar *Connect through SSH gateway (jump host)* apuntando a Brais (el servidor solo escucha en loopback).
 
