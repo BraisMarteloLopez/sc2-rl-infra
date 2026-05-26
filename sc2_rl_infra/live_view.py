@@ -1,26 +1,21 @@
-"""Visor en vivo por software (sin OpenGL propio), pensado para VNC.
+"""Visor en vivo por software (sin OpenGL), para ver agentes en tiempo real sobre VNC.
 
-Dos modos:
-- Feature layers (por defecto): pinta las capas de PySC2 con su paleta oficial.
-- RGB (`--rgb`): muestra el render REAL del juego (el framebuffer 3D). El render
-  lo hace SC2 por dentro (EGL/OSMesa) y nos llega como arrays; nosotros solo los
-  blitéamos. En Brais (GPU en MIG) el backend fiable es OSMesa (software): instala
-  `libosmesa6`. Ver NOTES §7.2.
+Es la vista canónica para mirar agentes en directo (Fases 1+): pinta las feature
+layers — lo que el agente realmente ve — en una ventana pygame *de software*, en un
+único hilo, reutilizando la paleta oficial de PySC2. Corre el agente con
+`visualize=False`, así que NO toca el renderer OpenGL de PySC2 (que aborta con
+BAD_ACCESS sobre TigerVNC: crea el contexto GL en el hilo principal y lo usa desde
+otro hilo, y Mesa/llvmpipe lo prohíbe). No necesita GPU gráfica. Ver NOTES.md §7.
 
-Por qué por software: el visor humano de PySC2 (`visualize=True`) crea un contexto
-OpenGL en el hilo principal y lo usa desde otro hilo; Mesa/llvmpipe lo prohíbe y
-aborta con BAD_ACCESS sobre VNC. Aquí corremos con `visualize=False` y dibujamos
-nosotros en una ventana pygame de software, un solo hilo. El render RGB del juego
-NO usa nuestro OpenGL: lo hace SC2 y nos pasa píxeles.
+Los gráficos RGB "reales" del juego se descartaron en Brais (GPU en MIG sin EGL y
+OSMesa moderna no carga en el binario de 2019; NOTES §7.2). Para la cinemática:
+`--save_replay` y abre el `.SC2Replay` en el cliente de SC2 de Windows (NOTES §7.3).
 
-Uso (en Brais, env `sc2-rl-infra` activo, VNC en :1):
-    DISPLAY=:1 python -m sc2_rl_infra.live_view                          # feature layers
-    DISPLAY=:1 python -m sc2_rl_infra.live_view --rgb                    # render RGB real
-    DISPLAY=:1 python -m sc2_rl_infra.live_view --rgb --record out.mp4   # graba a mp4
-    DISPLAY=:1 python -m sc2_rl_infra.live_view --record out.mp4         # feature layers a mp4
+Uso (en Brais, env `sc2-rl-infra` activo, VNC en :1 — ver tools/vnc.sh):
+    DISPLAY=:1 python -m sc2_rl_infra.live_view
+    DISPLAY=:1 python -m sc2_rl_infra.live_view --map CollectMineralShards --step_mul 4 --fps 30
+    DISPLAY=:1 python -m sc2_rl_infra.live_view --save_replay     # guarda el .SC2Replay
 
-Dependencias extra: `--rgb` necesita backend de render en SC2 (`sudo apt install
-libosmesa6`); `--record` necesita `pip install imageio imageio-ffmpeg`.
 Cierra la ventana (o Esc/Q) para detener.
 """
 
@@ -50,12 +45,10 @@ flags.DEFINE_list(
     "layers",
     ["screen:player_relative", "screen:unit_type",
      "minimap:player_relative", "minimap:camera"],
-    "Capas a mostrar (modo feature); tokens 'screen:nombre' o 'minimap:nombre'.",
+    "Capas a mostrar; tokens 'screen:nombre' o 'minimap:nombre' separados por comas.",
 )
-flags.DEFINE_bool("rgb", False, "Mostrar el render RGB real del juego en vez de feature layers (necesita OSMesa/EGL en SC2).")
-flags.DEFINE_integer("rgb_screen", 256, "Resolución (px) del render RGB de pantalla.")
-flags.DEFINE_integer("rgb_minimap", 64, "Resolución (px) del render RGB de minimapa.")
-flags.DEFINE_string("record", "", "Si se indica, graba la ventana a este .mp4 (necesita imageio-ffmpeg).")
+flags.DEFINE_bool("save_replay", False, "Guardar un .SC2Replay por episodio (exportable; se abre en el cliente de SC2 de Windows).")
+flags.DEFINE_string("replay_dir", "sc2-rl-infra", "Carpeta de replays (relativa a ~/StarCraftII/Replays/ o absoluta).")
 
 COLS = 2
 MARGIN = 8
@@ -126,49 +119,25 @@ def keep_running():
     return True
 
 
-def compose_panels(observation, panels):
-    """Devuelve [(título, imagen (H, W, 3) uint8), ...] según el modo activo."""
-    if FLAGS.rgb:
-        return [
-            ("rgb_screen", np.asarray(observation["rgb_screen"], dtype=np.uint8)),
-            ("rgb_minimap", np.asarray(observation["rgb_minimap"], dtype=np.uint8)),
-        ]
+def draw(screen, font, panels, observation, header, cell):
+    screen.fill(BG)
+    screen.blit(font.render(header, True, FG), (MARGIN, (HEADER_H - LABEL_H) // 2 + 2))
     planes = {
         "screen": np.asarray(observation["feature_screen"]),
         "minimap": np.asarray(observation["feature_minimap"]),
     }
-    return [(f"{which}:{feat.name}", colorize(planes[which][feat.index], feat))
-            for which, feat in panels]
-
-
-def draw(screen, font, items, header, cell):
-    screen.fill(BG)
-    screen.blit(font.render(header, True, FG), (MARGIN, (HEADER_H - LABEL_H) // 2 + 2))
-    for i, (title, image) in enumerate(items):
+    for i, (which, feat) in enumerate(panels):
         col, row = i % COLS, i // COLS
         x = MARGIN + col * (cell + MARGIN)
         y = HEADER_H + row * (cell + LABEL_H + MARGIN)
-        screen.blit(font.render(title, True, FG), (x, y))
-        screen.blit(plane_surface(image, cell), (x, y + LABEL_H))
+        surf = plane_surface(colorize(planes[which][feat.index], feat), cell)
+        screen.blit(font.render(f"{which}:{feat.name}", True, FG), (x, y))
+        screen.blit(surf, (x, y + LABEL_H))
     pygame.display.flip()
 
 
-def make_interface_format():
-    if FLAGS.rgb:
-        # Solo RGB: con un único espacio, PySC2 infiere el action_space (no hace
-        # falta pasarlo). El agente actúa en coords RGB.
-        return features.AgentInterfaceFormat(
-            rgb_dimensions=features.Dimensions(screen=FLAGS.rgb_screen, minimap=FLAGS.rgb_minimap),
-        )
-    return features.AgentInterfaceFormat(
-        feature_dimensions=features.Dimensions(screen=FLAGS.screen, minimap=FLAGS.minimap),
-        use_feature_units=True,
-    )
-
-
 def main(unused_argv):
-    panels = [] if FLAGS.rgb else resolve_layers(FLAGS.layers)
-    n_items = 2 if FLAGS.rgb else len(panels)
+    panels = resolve_layers(FLAGS.layers)
 
     # En headless, importar pysc2 puede dejar SDL con un driver de vídeo invisible
     # ('dummy'). Forzamos x11 y reiniciamos el subsistema para pintar en el VNC.
@@ -177,9 +146,8 @@ def main(unused_argv):
     pygame.display.init()
     pygame.font.init()
     print(f"[live_view] SDL video driver = {pygame.display.get_driver()}")
-    screen = pygame.display.set_mode(window_size(n_items, FLAGS.cell))
-    mode = "RGB" if FLAGS.rgb else "feature layers"
-    pygame.display.set_caption(f"sc2-rl-infra · visor {mode} (software)")
+    screen = pygame.display.set_mode(window_size(len(panels), FLAGS.cell))
+    pygame.display.set_caption("sc2-rl-infra · visor de feature layers (software)")
     font = pygame.font.Font(None, LABEL_H)
     clock = pygame.time.Clock()
 
@@ -187,51 +155,44 @@ def main(unused_argv):
     screen.blit(font.render("Lanzando SC2...", True, FG), (MARGIN, MARGIN))
     pygame.display.flip()
 
-    writer = None
-    if FLAGS.record:
-        import imageio
-        writer = imageio.get_writer(FLAGS.record, fps=FLAGS.fps, macro_block_size=1)
-
     agent = random_agent.RandomAgent()
-    try:
-        with sc2_env.SC2Env(
-            map_name=FLAGS.map,
-            players=[sc2_env.Agent(sc2_env.Race.random)],
-            agent_interface_format=make_interface_format(),
-            step_mul=FLAGS.step_mul,
-            game_steps_per_episode=0,
-            visualize=False,  # NO usamos el renderer GL de PySC2 (peta sobre VNC).
-        ) as env:
-            agent.setup(env.observation_spec()[0], env.action_spec()[0])
+    with sc2_env.SC2Env(
+        map_name=FLAGS.map,
+        players=[sc2_env.Agent(sc2_env.Race.random)],
+        agent_interface_format=features.AgentInterfaceFormat(
+            feature_dimensions=features.Dimensions(screen=FLAGS.screen, minimap=FLAGS.minimap),
+            use_feature_units=True,
+        ),
+        step_mul=FLAGS.step_mul,
+        game_steps_per_episode=0,
+        visualize=False,  # NO usamos el renderer GL de PySC2 (peta sobre VNC).
+        save_replay_episodes=1 if FLAGS.save_replay else 0,
+        replay_dir=FLAGS.replay_dir if FLAGS.save_replay else None,
+    ) as env:
+        agent.setup(env.observation_spec()[0], env.action_spec()[0])
 
-            running = True
-            for episode in range(1, FLAGS.episodes + 1):
-                if not running:
+        running = True
+        for episode in range(1, FLAGS.episodes + 1):
+            if not running:
+                break
+            timestep = env.reset()[0]
+            agent.reset()
+            total_reward, step = 0.0, 0
+            while True:
+                total_reward += float(timestep.reward)
+                header = (f"{FLAGS.map} | episodio {episode}/{FLAGS.episodes} | "
+                          f"step {step} | reward {total_reward:.0f}")
+                draw(screen, font, panels, timestep.observation, header, FLAGS.cell)
+                if not keep_running():
+                    running = False
                     break
-                timestep = env.reset()[0]
-                agent.reset()
-                total_reward, step = 0.0, 0
-                while True:
-                    total_reward += float(timestep.reward)
-                    header = (f"{FLAGS.map} | ep {episode}/{FLAGS.episodes} | "
-                              f"step {step} | reward {total_reward:.0f}{' | RGB' if FLAGS.rgb else ''}")
-                    draw(screen, font, compose_panels(timestep.observation, panels), header, FLAGS.cell)
-                    if writer is not None:
-                        frame = pygame.surfarray.array3d(screen).transpose(1, 0, 2)
-                        writer.append_data(np.ascontiguousarray(frame))
-                    if not keep_running():
-                        running = False
-                        break
-                    if timestep.last() or (FLAGS.max_steps and step >= FLAGS.max_steps):
-                        break
-                    timestep = env.step([agent.step(timestep)])[0]
-                    step += 1
-                    clock.tick(FLAGS.fps)
-    finally:
-        if writer is not None:
-            writer.close()
-            print(f"[live_view] vídeo escrito en {FLAGS.record}")
-        pygame.quit()
+                if timestep.last() or (FLAGS.max_steps and step >= FLAGS.max_steps):
+                    break
+                timestep = env.step([agent.step(timestep)])[0]
+                step += 1
+                clock.tick(FLAGS.fps)
+
+    pygame.quit()
 
 
 if __name__ == "__main__":
