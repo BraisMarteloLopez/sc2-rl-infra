@@ -144,7 +144,7 @@ pygame.error: Could not make GL context current: BadAccess          (GLX)
 pygame.error: ... eglMakeCurrent failed ... EGL_BAD_ACCESS          (con SDL_VIDEO_X11_FORCE_EGL=1)
 ```
 
-Causa: el renderer humano crea el contexto OpenGL en el hilo principal y lo usa desde un hilo de render; Mesa software (llvmpipe) aplica de forma estricta la regla "un contexto GL solo activo en un hilo a la vez" → `BAD_ACCESS`. Los drivers NVIDIA son laxos con eso (por eso a otros les funciona); llvmpipe no. **No lo arreglan**: ninguna variable de entorno (GLX ni EGL), ni reiniciar el VNC, ni instalar `libgl1-mesa-dri`/`mesa-utils` (llvmpipe da `direct rendering: Yes`, pero el problema es de hilos, no del driver). **VirtualGL** tampoco vale aquí: la GPU está en **MIG de cómputo** y NVIDIA deshabilita OpenGL/Vulkan bajo MIG. Y el binario Linux de SC2 ni soporta el render RGB oficial (`Creating stub renderer...`), solo feature layers.
+Causa: el renderer humano crea el contexto OpenGL en el hilo principal y lo usa desde un hilo de render; Mesa software (llvmpipe) aplica de forma estricta la regla "un contexto GL solo activo en un hilo a la vez" → `BAD_ACCESS`. Los drivers NVIDIA son laxos con eso (por eso a otros les funciona); llvmpipe no. **No lo arreglan**: ninguna variable de entorno (GLX ni EGL), ni reiniciar el VNC, ni instalar `libgl1-mesa-dri`/`mesa-utils` (llvmpipe da `direct rendering: Yes`, pero el problema es de hilos, no del driver). **VirtualGL** tampoco vale aquí: la GPU está en **MIG de cómputo** y NVIDIA deshabilita OpenGL/Vulkan bajo MIG. (En esas pruebas SC2 mostraba `Creating stub renderer` porque pedimos solo feature layers; el cliente Linux **sí** sabe renderizar RGB si se solicita — corrección y detalle en §7.2.)
 
 **Solución que funciona — visor propio por software.** `sc2_rl_infra/live_view.py`: corre el agente con `visualize=False` (no toca el renderer GL) y pinta las feature layers en una ventana **pygame de software (sin OpenGL), un solo hilo**, reutilizando la paleta oficial de PySC2. Esquiva el muro por completo y no necesita GPU gráfica.
 
@@ -155,3 +155,16 @@ DISPLAY=:1 python -m sc2_rl_infra.live_view --map CollectMineralShards --step_mu
 ```
 
 Gotcha imprescindible: al importar pysc2 en headless, SDL queda con un driver de vídeo invisible (`dummy`); `live_view.py` fuerza `SDL_VIDEODRIVER=x11` y reinicia el subsistema antes de abrir la ventana (si no, el bucle corre pero no aparece nada). Al arrancar imprime `[live_view] SDL video driver = x11`.
+
+### 7.2. Gráficos reales y jugar humano-vs-IA — corrección + opciones (futuro)
+
+**Corrección (rectifica una afirmación previa).** El cliente **Linux SÍ soporta el Rendered Interface (RGB de alta fidelidad)** — el framebuffer 3D del juego, lo que vería un humano. Se obtiene pidiéndolo (`want_rgb=True` / `rgb_dimensions` en `AgentInterfaceFormat`) con un backend de render: **EGL** (hardware, p. ej. NVIDIA) u **OSMesa** (software). El `Creating stub renderer` de las pruebas de §5–§7.1 salía porque pedíamos **solo feature layers** (`want_rgb=False` en `parse_replay.py`), no por incapacidad del binario.
+
+**Implicación:** se pueden tener **gráficos reales en Brais, sin Windows y sin romper la regla de versión.** El RGB vuelve como arrays por la API → blit directo en el visor software (sin OpenGL propio) o volcado a mp4. Caveat práctico: **EGL hardware probablemente bloqueado por el MIG** (graphics deshabilitado bajo MIG) → el backend fiable es **OSMesa (software)**: headless pero **lento** (rasteriza el 3D en CPU), bueno para clips/inspección, no para throughput de entrenamiento. Requiere `libOSMesa` instalado y un test en Brais para confirmar. **Es el camino limpio para "ver el juego de verdad".**
+
+Jugar humano-vs-IA es aparte; dos variantes:
+
+- **Variante A — humano-vs-agente en vista feature-layer (`pysc2.bin.play_vs_agent`).** Humano juega en Windows (ahí el renderer GL de PySC2 sí funciona: el `BAD_ACCESS` era de llvmpipe/VNC, no de Windows), agente headless en Linux, misma partida por **LAN**. Interactivo, pero el humano ve la **UI de feature layers**, no la cinemática. Costes: corre SC2 en Windows (**rompe la regla**); **casar versiones** (4.10 en Windows retail es difícil; o la última en ambos lados = track de versión separado del pipeline 4.10/3.16.1); red por **LAN directa** (ya estáis en 172.30.x.x; túnel SSH frágil para esto). Aperitivo barato pero **futuro**; sin valor contra agente aleatorio/BC inicial. Pasos: SC2 + PySC2 en Windows en versión casada → `play_vs_agent` apuntando al host/puerto del agente en Brais por LAN.
+- **Variante B — estilo AlphaStar (gráficos nativos + jugar).** Humano en el **cliente retail nativo** (gráficos completos); el agente se une a esa partida vía s2api. La experiencia real de jugar contra el bot. **Infra a medida seria; meta de fin de juego** (requiere agente fuerte). Precedente: los showmatches de AlphaStar (agente en servidor, humano en cliente, en red).
+
+**Recomendación.** Gráficos/clips → **RGB vía OSMesa en Brais** (limpio, sin Windows). Jugar interactivo → **A** (con sus costes) como aperitivo, **B** como meta lejana.
