@@ -150,11 +150,11 @@ El `.SC2Replay` es el artefacto portátil. Para verlo con **gráficos reales**: 
 
 Un A2C mínimo (PyTorch, FullyConv) que **aprende** MoveToBeacon mientras lo ves entrenar en el visor (el reward medio sube en la cabecera). Es un anticipo de Fase 3, no sustituye al plan. Requiere PyTorch (la red es minúscula; CPU basta):
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install torch          # desde PyPI; el índice de PyTorch (download.pytorch.org) está bloqueado en Brais (ver NOTES §4)
 DISPLAY=:1 python -m sc2_rl_infra.online.a2c_beacon
 # flags: --updates --nsteps --lr --gamma --entropy --value_coef --max_grad_norm --screen --minimap --step_mul --fps --cell --device
 ```
-RL es quisquilloso: si el reward se queda plano, prueba `--entropy 0.01` (más exploración) o `--lr 3e-4`.
+Estado: corre y entrena, pero con un solo env **aún no converge** (arranque frío); siguiente paso = reward shaping. Detalle en `NOTES §8`. Techo de referencia: `live_view --agent pysc2.agents.scripted_agent.MoveToBeacon`. RL es quisquilloso: si el reward sigue plano, prueba `--entropy 0.01` o `--lr 3e-4`.
 
 ---
 
