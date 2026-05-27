@@ -152,9 +152,10 @@ Un A2C mínimo (PyTorch, FullyConv) que **aprende** MoveToBeacon mientras lo ves
 ```bash
 pip install torch          # desde PyPI; el índice de PyTorch (download.pytorch.org) está bloqueado en Brais (ver NOTES §4)
 DISPLAY=:1 python -m sc2_rl_infra.online.a2c_beacon
-# flags: --updates --nsteps --lr --gamma --entropy --value_coef --max_grad_norm --screen --minimap --step_mul --fps --cell --device
+DISPLAY=:1 python -m sc2_rl_infra.online.a2c_beacon --noshaped   # reward nativo (el caso plano de antes)
+# flags: --updates --nsteps --lr --gamma --entropy --value_coef --max_grad_norm --shaped --shape_coef --render_every --screen --minimap --step_mul --fps --cell --device
 ```
-Estado: corre y entrena, pero con un solo env **aún no converge** (arranque frío); siguiente paso = reward shaping. Detalle en `NOTES §8`. Techo de referencia: `live_view --agent pysc2.agents.scripted_agent.MoveToBeacon`. RL es quisquilloso: si el reward sigue plano, prueba `--entropy 0.01` o `--lr 3e-4`.
+Estado: con un solo env el reward nativo es escaso y el agente se quedaba plano (~1, arranque frío). Ahora lleva **reward shaping potential-based por distancia al beacon (`--shaped`, default ON)**: señal densa por acercarse que debería romper el arranque frío y hacer subir el reward hacia el techo del scripted (~25). El reward que se muestra/compara sigue siendo el **nativo** (el shaping solo guía el aprendizaje). El caso plano se reproduce con `--noshaped`. Detalle en `NOTES §8`. Techo de referencia: `live_view --agent pysc2.agents.scripted_agent.MoveToBeacon`. RL es quisquilloso: si sigue plano, prueba `--shape_coef 2`, `--entropy 0.01` o `--lr 3e-4`.
 
 ---
 

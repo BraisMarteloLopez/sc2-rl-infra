@@ -2,7 +2,7 @@
 
 Documento vivo de decisiones tomadas, restricciones detectadas y decisiones aparcadas durante Fase 0.
 
-Última actualización: 2026-05-26.
+Última actualización: 2026-05-27.
 
 ---
 
@@ -182,8 +182,8 @@ Tensión de fondo: **binario de 2019 + GPU en MIG (sin gráficos) + Mesa moderna
 
 `sc2_rl_infra/online/a2c_beacon.py` — A2C (FullyConv, PyTorch) que entrena MoveToBeacon renderizando en el visor software, como adelanto de Fase 3. Requiere torch (instalar **desde PyPI**: `pip install torch`; el índice de PyTorch está bloqueado en Brais, ver §4). Se conduce cualquier agente en el visor con `live_view --agent módulo.Clase`.
 
-**Estado (dónde se dejó).** Corre y entrena (torch entró por PyPI, visor en vivo OK), pero **con un solo env aún no converge**: a ~180 updates el reward seguía a nivel aleatorio (~0.4, mejor 1). Es **arranque frío** — la recompensa nativa es escasa al principio (el marine rara vez pisa el beacon por azar → pocos +1 → gradiente débil) y un solo env es un setup débil. Sin bug aparente (el agente se mueve, la selección funciona, el loss es no-nulo).
+**Arranque frío (sin shaping).** Corre y entrena (torch entró por PyPI, visor en vivo OK), pero **con un solo env y reward nativo no converge**: a ~180 updates el reward seguía a nivel aleatorio (~0.4, mejor 1). Es **arranque frío** — la recompensa nativa es escasa al principio (el marine rara vez pisa el beacon por azar → pocos +1 → gradiente débil) y un solo env es un setup débil. Sin bug aparente (el agente se mueve, la selección funciona, el loss es no-nulo). Este caso se reproduce hoy con `--noshaped`.
 
-**Siguiente paso si se retoma el spike.** **Reward shaping** por distancia (recompensa densa por acercarse al beacon, potential-based) para que aprenda en minutos; opcionalmente más exploración (`--entropy`) o varios envs en paralelo (rompe el "ver uno en vivo"). Techo de referencia: el agente scripted `pysc2.agents.scripted_agent.MoveToBeacon` (vía `live_view --agent`) resuelve el mapa (~25/episodio); el aleatorio (~1) es el suelo.
+**Reward shaping implementado (2026-05-27, `--shaped` default ON).** Shaping potential-based por distancia marine→beacon (`beacon_distance` sobre `feature_screen[player_relative]`: SELF=1, NEUTRAL=3): `F = shape_coef·(γ·Φ' − Φ)` con `Φ = −dist_norm`, premiando acercarse. Detalles: se **salta en el step en que se toca el beacon** (reaparece lejos → ese salto no es "alejarse") y al terminar el episodio; el reward que se **muestra y se compara con los baselines sigue siendo el nativo** (el shaping solo entra en el cómputo de returns/ventajas). Flags nuevos: `--shaped/--noshaped`, `--shape_coef` (1.0), `--render_every` (1). **Pendiente: confirmar en vivo en Brais** que con el shaping el reward trepa del ~1 hacia el techo del scripted (~25); si sigue plano, subir `--shape_coef`/`--entropy` o bajar `--lr`. Techo de referencia: el agente scripted `pysc2.agents.scripted_agent.MoveToBeacon` (vía `live_view --agent`) resuelve el mapa (~25/episodio); el aleatorio (~1) es el suelo.
 
 **Ojo:** es un spike mínimo, **no la arquitectura de AlphaStar** (Fase 1: encoder de entidades + espacial + LSTM + heads autoregresivos). No sustituye al plan — **Fase 1 (behaviour cloning) sigue siendo el siguiente paso oficial**; el dataset de replays humanos es su primera tarea (ver §5, RESULTS §9).

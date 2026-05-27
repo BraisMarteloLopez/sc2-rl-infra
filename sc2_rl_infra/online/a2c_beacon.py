@@ -6,8 +6,13 @@ renderizando cada step en una ventana pygame de software (como `live_view`) para
 agente pasar de torpe a resolver el mapa en tiempo real. La cabecera muestra el reward
 medio reciente, que debería subir de ~0-1 a ~20+ conforme aprende.
 
+Por defecto usa REWARD SHAPING potential-based por distancia (premia acercarse al beacon):
+da señal densa desde el primer step y rompe el arranque frío que con un solo env dejaba el
+reward plano (~1). Con --noshaped vuelve al reward nativo escaso (para comparar). El reward
+que se MUESTRA y se compara con los baselines es SIEMPRE el nativo, no el del shaping.
+
 Es un ANTICIPO de la Fase 3 (RL online en minijuegos); no sustituye a las fases del plan.
-RL es quisquilloso: si no converge, prueba a subir --entropy o bajar --lr.
+RL es quisquilloso: si no converge, prueba a subir --entropy/--shape_coef o bajar --lr.
 
 Requisito: PyTorch en el env  ->  pip install torch   (CPU vale: la red es minúscula y
 el cuello de botella es el propio SC2; la GPU apenas ayuda aquí).
@@ -15,12 +20,14 @@ el cuello de botella es el propio SC2; la GPU apenas ayuda aquí).
 Uso (en Brais, env `sc2-rl-infra` activo, VNC en :1 — ver tools/vnc.sh):
     DISPLAY=:1 python -m sc2_rl_infra.online.a2c_beacon
     DISPLAY=:1 python -m sc2_rl_infra.online.a2c_beacon --updates 5000 --fps 20
+    DISPLAY=:1 python -m sc2_rl_infra.online.a2c_beacon --noshaped   # reward nativo (el caso que NO converge)
     DISPLAY=:1 python -m sc2_rl_infra.online.a2c_beacon --device cuda
 
 Cierra la ventana (o Esc/Q) para detener; el reward medio se imprime en la terminal.
 """
 
 import collections
+import math
 import os
 
 import numpy as np
@@ -50,11 +57,18 @@ flags.DEFINE_integer("fps", 0, "Cap de FPS del visor (0 = sin cap, entrena a top
 flags.DEFINE_integer("cell", 380, "Lado (px) de cada panel.")
 flags.DEFINE_integer("log_every", 20, "Imprimir métricas cada N updates.")
 flags.DEFINE_string("device", "cpu", "torch device: 'cpu' o 'cuda'.")
+flags.DEFINE_bool("shaped", True, "Reward shaping potential-based por distancia al beacon "
+                  "(señal densa que rompe el arranque frío). --noshaped usa solo el reward nativo.")
+flags.DEFINE_float("shape_coef", 1.0, "Peso del shaping por distancia (súbelo si sigue plano).")
+flags.DEFINE_integer("render_every", 1, "Renderiza 1 de cada N steps (súbelo para entrenar más "
+                     "rápido a costa de un visor a saltos).")
 
 _MOVE_SCREEN = actions.FUNCTIONS.Move_screen.id
 _SELECT_ARMY = actions.FUNCTIONS.select_army.id
 _PLAYER_RELATIVE = features.SCREEN_FEATURES.player_relative.index
 _SELECTED = features.SCREEN_FEATURES.selected.index
+_PR_SELF = int(features.PlayerRelative.SELF)        # 1  (el marine)
+_PR_NEUTRAL = int(features.PlayerRelative.NEUTRAL)  # 3  (el beacon)
 
 # --- visor (software, sin OpenGL; mismo enfoque que live_view) ---
 MARGIN, LABEL_H, HEADER_H = 8, 22, 30
@@ -135,6 +149,20 @@ def obs_to_tensor(obs, device):
     return torch.as_tensor(x, device=device)
 
 
+def beacon_distance(obs, size):
+    """Distancia euclídea normalizada (0..1) entre el marine (SELF) y el beacon (NEUTRAL).
+
+    Devuelve None si alguno no está en pantalla (ese step no recibe shaping).
+    """
+    pr = np.asarray(obs.observation["feature_screen"])[_PLAYER_RELATIVE]
+    sy, sx = np.nonzero(pr == _PR_SELF)
+    by, bx = np.nonzero(pr == _PR_NEUTRAL)
+    if sx.size == 0 or bx.size == 0:
+        return None
+    dist = math.hypot(sy.mean() - by.mean(), sx.mean() - bx.mean())
+    return dist / (math.sqrt(2.0) * size)
+
+
 def select_if_needed(env, obs, win, font, cell):
     """MoveToBeacon necesita seleccionar el marine una vez por episodio."""
     while _MOVE_SCREEN not in obs.observation["available_actions"]:
@@ -188,15 +216,25 @@ def main(unused_argv):
 
             for _ in range(FLAGS.nsteps):
                 obs = select_if_needed(env, obs, win, font, FLAGS.cell)
+                d_before = beacon_distance(obs, size) if FLAGS.shaped else None
                 logits, value = model(obs_to_tensor(obs, device))
                 dist = torch.distributions.Categorical(logits=logits)
                 idx = dist.sample()
                 y, x = int(idx.item()) // size, int(idx.item()) % size
 
                 obs = env.step([actions.FUNCTIONS.Move_screen("now", [x, y])])[0]
-                r, done = float(obs.reward), obs.last()
+                r_native, done = float(obs.reward), obs.last()
                 total_steps += 1
-                ep_reward += r
+                ep_reward += r_native   # se reporta SIEMPRE el reward nativo (comparable a baselines)
+
+                # Shaping potential-based: premia acercarse al beacon (señal densa que rompe el
+                # arranque frío; no cambia la política óptima, Ng et al. 1999). Se salta al tocar
+                # el beacon —reaparece lejos, ese salto no es "alejarse"— y al terminar el episodio.
+                r = r_native
+                if FLAGS.shaped and not done and r_native == 0.0 and d_before is not None:
+                    d_after = beacon_distance(obs, size)
+                    if d_after is not None:
+                        r += FLAGS.shape_coef * (FLAGS.gamma * (-d_after) - (-d_before))
 
                 logps.append(dist.log_prob(idx).squeeze(0))
                 values.append(value.squeeze(0))
@@ -204,10 +242,11 @@ def main(unused_argv):
                 rewards.append(r)
                 dones.append(1.0 if done else 0.0)
 
-                mean_r = (sum(recent) / len(recent)) if recent else 0.0
-                header = (f"A2C MoveToBeacon | update {update}/{FLAGS.updates} | "
-                          f"reward medio(20): {mean_r:.1f} | mejor: {best:.0f} | steps {total_steps}")
-                render(win, font, obs, header, FLAGS.cell)
+                if total_steps % FLAGS.render_every == 0:
+                    mean_r = (sum(recent) / len(recent)) if recent else 0.0
+                    header = (f"A2C MoveToBeacon | update {update}/{FLAGS.updates} | "
+                              f"reward medio(20): {mean_r:.1f} | mejor: {best:.0f} | steps {total_steps}")
+                    render(win, font, obs, header, FLAGS.cell)
                 if not keep_running():
                     running = False
                     break
