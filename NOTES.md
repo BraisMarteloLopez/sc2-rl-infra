@@ -62,6 +62,7 @@ Documento vivo de decisiones tomadas, restricciones detectadas y decisiones apar
 | protobuf < 4 obligatorio | `s2clientprotocol` (dep de PySC2) trae `_pb2.py` generados con layout pre-4.21. protobuf ≥ 4 revienta en `descriptor.py:1027` (`Descriptors cannot be created directly`). Verificado: 7.34.1 falla, 3.20.3 OK. | Pin duro `protobuf<4` en el env. Pip baja `googleapis-common-protos` a 1.73.0 automáticamente para resolver el conflicto. |
 | Egress hacia Akamai bloqueado desde Brais | DNS resuelve normal. TCP/443 a cualquier IP de Akamai (probado `blzdistsc2-a.akamaihd.net` con sus dos IPs por geo-DNS, edges alternativos vía `--resolve`, `www.akamai.com`, `www.blizzard.com`) timeout silenciosos. GitHub y otros HTTPS no-Akamai funcionan (200 OK en ~60 ms). mtr no produce hops (probable filtrado ICMP). Causa exacta (firewall LXC / ISP / upstream) no determinable desde dentro del contenedor. | Bloqueante para descarga directa desde Brais de cualquier asset alojado por Blizzard. Workaround obligatorio: sideload (descargar fuera y `scp` a Brais). Afecta también al dataset de replays (Fase 1) — ver row siguiente. |
 | Dataset de replays de Blizzard probablemente requiere sideload | Vive en el mismo CDN Akamai bloqueado desde Brais. El riesgo apuntado en `01_PHASE0_infra.md §5` ("Dataset puede no estar accesible") se concreta hoy: la causa probable no es que Blizzard lo haya retirado (al menos no el binario, que sigue vivo: el CDN responde a otras redes), sino que la red de Brais no llega a Akamai. | Verificar al inicio de Fase 1 con un URL del dataset. Mismo workaround que el binario: sideload. |
+| Egress a `download.pytorch.org` bloqueado desde Brais | `pip install torch --index-url https://download.pytorch.org/whl/cpu` da `Network is unreachable` (igual que Akamai). **PyPI sí funciona** (de ahí salieron las deps del env). | Instalar torch desde PyPI: `pip install torch` (sin `--index-url`). Si PyPI también fallara, sideload del wheel + deps. |
 
 ### 4.1 Banderas abiertas (no bloqueantes ahora, vigilar)
 
@@ -174,3 +175,15 @@ Tensión de fondo: **binario de 2019 + GPU en MIG (sin gráficos) + Mesa moderna
 3. **Jugar humano-vs-agente → en Windows contra el agente en Brais (por LAN/SSH).** Humano en el cliente de Windows, agente headless en Brais, misma partida (`pysc2.bin.play_vs_agent`). Es **futuro**: requiere SC2 + PySC2 en Windows en versión casada y un agente que merezca la pena enfrentar; rompe la regla "SC2 solo en Brais" de forma **acotada** (solo para jugar/espectar, nunca para el pipeline de datos). La variante nativa estilo AlphaStar (humano en cliente retail + agente vía s2api, gráficos completos) queda como meta lejana.
 
 **Resumen:** feature layers en vivo para depurar (en Brais) · replays como export y como cinemática (vía cliente de Windows) · juego humano-vs-IA en Windows (futuro). **RGB directo en Brais: descartado (§7.2).**
+
+---
+
+## 8. Spike de RL online (Fase 3): A2C MoveToBeacon (2026-05-26)
+
+`sc2_rl_infra/online/a2c_beacon.py` — A2C (FullyConv, PyTorch) que entrena MoveToBeacon renderizando en el visor software, como adelanto de Fase 3. Requiere torch (instalar **desde PyPI**: `pip install torch`; el índice de PyTorch está bloqueado en Brais, ver §4). Se conduce cualquier agente en el visor con `live_view --agent módulo.Clase`.
+
+**Estado (dónde se dejó).** Corre y entrena (torch entró por PyPI, visor en vivo OK), pero **con un solo env aún no converge**: a ~180 updates el reward seguía a nivel aleatorio (~0.4, mejor 1). Es **arranque frío** — la recompensa nativa es escasa al principio (el marine rara vez pisa el beacon por azar → pocos +1 → gradiente débil) y un solo env es un setup débil. Sin bug aparente (el agente se mueve, la selección funciona, el loss es no-nulo).
+
+**Siguiente paso si se retoma el spike.** **Reward shaping** por distancia (recompensa densa por acercarse al beacon, potential-based) para que aprenda en minutos; opcionalmente más exploración (`--entropy`) o varios envs en paralelo (rompe el "ver uno en vivo"). Techo de referencia: el agente scripted `pysc2.agents.scripted_agent.MoveToBeacon` (vía `live_view --agent`) resuelve el mapa (~25/episodio); el aleatorio (~1) es el suelo.
+
+**Ojo:** es un spike mínimo, **no la arquitectura de AlphaStar** (Fase 1: encoder de entidades + espacial + LSTM + heads autoregresivos). No sustituye al plan — **Fase 1 (behaviour cloning) sigue siendo el siguiente paso oficial**; el dataset de replays humanos es su primera tarea (ver §5, RESULTS §9).
