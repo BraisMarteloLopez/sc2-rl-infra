@@ -170,11 +170,14 @@ OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m sc2_rl_infra.online.a2c_beacon \
     --num_envs 12 --map CollectMineralShards \
     --checkpoint_dir checkpoints/a2c_shards --save_checkpoint_every 100
 
-# FindAndDefeatZerglings: combate; la cabeza Attack se entrena, --noshaped (no hay target NEUTRAL).
+# FindAndDefeatZerglings: combate con niebla; la cabeza Attack se entrena. Sin
+# NEUTRAL --shaped es no-op; añade --explore_coef para premiar área del minimapa nueva.
 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m sc2_rl_infra.online.a2c_beacon \
-    --num_envs 12 --map FindAndDefeatZerglings --noshaped \
+    --num_envs 12 --map FindAndDefeatZerglings --noshaped --explore_coef 1.0 \
     --checkpoint_dir checkpoints/a2c_zerglings --save_checkpoint_every 100
 ```
+
+Flag de exploración: `--explore_coef <float>` (default 0 = off) añade `F = coef · Δ(fracción minimapa visto)` por step. Útil sobre todo en combat-minigames con niebla — rompe plateaus donde el agente no encuentra enemigos. Combinable con `--shaped` (cada uno gobierna su señal independiente).
 Techos realistas con esta arquitectura (`select_army` + Move/Attack, sin selección por unidad): MoveToBeacon ~25 ✓, CollectMineralShards ~17 (los 2 marines arrastrados juntos), FindAndDefeatZerglings ~baseline-SC2LE (~45), DefeatZerglingsAndBanelings limitado (vs banelings la separación es clave y no hay selección por marine). Detalle por mapa en `NOTES §8`.
 
 Checkpoints en `<--checkpoint_dir>/`: `checkpoint_NNNNNN.pt` (snapshot periódico), `checkpoint_final_NNNNNN.pt` (al cerrar) y **`best.pt`** (se sobreescribe cuando `reward medio(20)` mejora; es el .pt para inferencia/demo, lo prefiere por defecto el wrapper-agente). Reanuda entrenamiento con `--load_checkpoint <ruta>`. Replays en `~/StarCraftII/Replays/<--replay_dir>/`.
