@@ -155,15 +155,15 @@ pip install torch    # desde PyPI; download.pytorch.org está bloqueado en Brais
 # Modo VISOR (1 env, debug visual; necesita VNC en :1):
 DISPLAY=:1 python -m sc2_rl_infra.online.a2c_beacon --fps 30
 
-# Modo PARALELO headless (entrenamiento serio; sweet spot N=8, RESULTS §6):
-python -m sc2_rl_infra.online.a2c_beacon --num_envs 8 \
+# Modo PARALELO headless (entrenamiento serio; N=12 satura los 12 cores con OMP=1):
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m sc2_rl_infra.online.a2c_beacon --num_envs 12 \
     --save_checkpoint_every 100 --save_replay_every 200
 ```
 Flags: `--num_envs --updates --nsteps --lr --gamma --entropy --shaped --shape_coef --value_coef --max_grad_norm --screen --minimap --step_mul --device --log_every --save_checkpoint_every --checkpoint_dir --load_checkpoint --save_replay_every --replay_dir` (+ `--fps --cell --render_every` solo modo visor).
 
 Shaping potential-based por distancia (`--shaped`, default ON) rompe el arranque frío que dejaba el reward plano (~1) con reward nativo escaso. El reward que se muestra/compara es siempre el **nativo**; caso plano de referencia con `--noshaped`. Checkpoints en `--checkpoint_dir` (default `checkpoints/a2c_beacon/`); replays bajo `~/StarCraftII/Replays/<--replay_dir>/`. Reanuda con `--load_checkpoint <ruta>`.
 
-Estado (2026-05-28): shaping evaluado en 1 env — con `--shape_coef 2 --entropy 0.01` la política se descalibra (`NOTES §8`); empezar con **defaults**. Modo paralelo + checkpoints shipped pero **no validado en SC2** — smoke test obligado antes del N=8: `--num_envs 2 --updates 50 --save_checkpoint_every 25 --log_every 5`. Techo de referencia: scripted (`live_view --agent pysc2.agents.scripted_agent.MoveToBeacon`) ~25/episodio; suelo random ~1.
+Estado (2026-05-28): **SPIKE RESUELTO** en Brais. Paralelo con `--num_envs 12` (+ `OMP_NUM_THREADS=1`) convergió a `reward medio(20) ≈ 25.4` (techo del scripted ~25, mejor 29) en **~160 updates / ~2:30 min de pared**. Lo que con 1 env y shaping agresivo no convergía, en paralelo con defaults sale en minutos — el escalado a N envs era la clave. Detalle en `NOTES §8`. Checkpoints en `~/sc2-rl-infra/checkpoints/a2c_beacon/`. Techo de referencia: scripted (`live_view --agent pysc2.agents.scripted_agent.MoveToBeacon`) ~25/episodio; suelo random ~1.
 
 ---
 

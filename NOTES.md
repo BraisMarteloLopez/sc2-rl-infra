@@ -214,10 +214,10 @@ Lo que en Brais se descartó (§7.2) **funciona en Windows**: PySC2 conduce el c
 - `--save_checkpoint_every N` + `--checkpoint_dir`: guarda `{model, optimizer, update, total_steps, best, recent}` cada N updates y al salir (también en Ctrl+C, `try/finally`). `--load_checkpoint <ruta>` reanuda.
 - `--save_replay_every N` + `--replay_dir`: `save_replay_episodes` al SC2Env (cada env guarda un `.SC2Replay` cada N episodios suyos).
 
-**Estado: solo validado en sandbox** (py_compile + lógica numpy de helpers en aislado). El paralelo **NO se ha probado con SC2 real**; `spawn` + SC2 + pipes pueden tener sorpresas. **Smoke test obligado antes del run de 8:**
-```
-python -m sc2_rl_infra.online.a2c_beacon --num_envs 2 --updates 50 --save_checkpoint_every 25 --log_every 5
-```
-Espera ver `lanzando 2 envs SC2 en paralelo (headless)...` → `2 envs listos en ~6-10s` → logs `[a2c_beacon] update 5 | envs 2 | reward medio(20) ... | NN step/s` → 2 checkpoints en `checkpoints/a2c_beacon/`. Si va, lanzar el real con `--num_envs 8 --save_checkpoint_every 100 --save_replay_every 200` (con defaults de entropy/shape_coef).
+**Probado en Brais (2026-05-28, paralelo N=12): SPIKE RESUELTO.** Run con `--num_envs 12 --save_checkpoint_every 100 --save_replay_every 200` (defaults para `entropy`/`shape_coef`): a **update 160** (~30 720 transiciones, ~2:30 de pared) el agente alcanza **`reward medio(20) = 25.4`** (techo del scripted ~25) y `mejor = 29`. **El spike de Fase 3 (un A2C aprendiendo MoveToBeacon a nivel del baseline SC2LE) queda demostrado.** Lo que con 1 env y shaping agresivo no convergía, en paralelo con defaults sale en minutos: el escalado a N envs (gradientes decorrelacionados) era la clave.
+
+Throughput observado: **~214 step/s a N=12** — muy por debajo del techo de Fase 0 (4744 step/s con `no_op`, RESULTS §4). El cuello ya no es SC2 sino el padre Python (pickle de los 12 `feature_screen` por step + numpy + torch). Optimizable (mandar solo las 2 capas que usa el modelo, vectorizar `beacon_distance`, etc.), pero **ya no hace falta para el spike** — convergió en minutos igualmente. **Recomendación de receta**: `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` delante del comando para que torch no acapare cores que necesitan los workers (RESULTS §6 daba N=8 como sweet spot asumiendo trainer multi-hilo; con torch en 1 hilo, N=12 satura los 12 cores del LXC y converge sin problemas).
+
+Checkpoints en `~/sc2-rl-infra/checkpoints/a2c_beacon/checkpoint_NNNNNN.pt` (cada 100 updates + `_final_` al cerrar). Reanudar con `--load_checkpoint <ruta>`. **Pendiente menor** (no bloquea Fase 1): wrapper-agente que cargue un `.pt` y se conduzca por `live_view --agent --save_replay` (Brais, feature layers) o `pysc2.bin.agent --agent ...` (Windows, 3D real, §7.4). Eso cierra el ciclo "checkpoint → ver al agente entrenado → replay portable".
 
 **Ojo:** es un spike mínimo, **no la arquitectura de AlphaStar** (Fase 1: encoder de entidades + espacial + LSTM + heads autoregresivos). No sustituye al plan — **Fase 1 (behaviour cloning) sigue siendo el siguiente paso oficial**; el dataset de replays humanos es su primera tarea (ver §5, RESULTS §9).
