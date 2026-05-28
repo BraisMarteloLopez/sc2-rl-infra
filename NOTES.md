@@ -2,7 +2,7 @@
 
 Documento vivo de decisiones tomadas, restricciones detectadas y decisiones aparcadas durante Fase 0.
 
-Última actualización: 2026-05-26.
+Última actualización: 2026-05-28.
 
 ---
 
@@ -174,7 +174,28 @@ Tensión de fondo: **binario de 2019 + GPU en MIG (sin gráficos) + Mesa moderna
 2. **Export de replays.** Cada partida puede guardar su `.SC2Replay` (`live_view --save_replay`, vía `save_replay_episodes` de `SC2Env`; van a `~/StarCraftII/Replays/`). Es el artefacto portátil: se copia a Windows (`scp` / SFTP de MobaXterm) y, además de archivarlo, **es la vía a los gráficos reales** — se abre en el cliente de SC2 de Windows y se ve con la cinemática completa (con el cliente en la misma versión que grabó el replay).
 3. **Jugar humano-vs-agente → en Windows contra el agente en Brais (por LAN/SSH).** Humano en el cliente de Windows, agente headless en Brais, misma partida (`pysc2.bin.play_vs_agent`). Es **futuro**: requiere SC2 + PySC2 en Windows en versión casada y un agente que merezca la pena enfrentar; rompe la regla "SC2 solo en Brais" de forma **acotada** (solo para jugar/espectar, nunca para el pipeline de datos). La variante nativa estilo AlphaStar (humano en cliente retail + agente vía s2api, gráficos completos) queda como meta lejana.
 
-**Resumen:** feature layers en vivo para depurar (en Brais) · replays como export y como cinemática (vía cliente de Windows) · juego humano-vs-IA en Windows (futuro). **RGB directo en Brais: descartado (§7.2).**
+**Resumen:** feature layers en vivo para depurar (en Brais) · replays como export y como cinemática (vía cliente de Windows) · **gráficos 3D reales vía PySC2 en Windows: validado (§7.4)** · juego humano-vs-IA en Windows (futuro). **RGB directo en Brais: descartado (§7.2); en Windows sí (§7.4).**
+
+### 7.4. Gráficos reales vía PySC2 en Windows — VALIDADO (2026-05-27)
+
+Lo que en Brais se descartó (§7.2) **funciona en Windows**: PySC2 conduce el cliente retail y renderiza el Rendered Interface (3D real) + feature layers, porque en Windows hay GPU con gráficos y display (sin MIG, sin el binario de 2019). Es la vía buena para la cinemática y la base del `play_vs_agent` futuro. La regla sigue intacta: el SC2 del **pipeline de datos** solo en Brais; Windows es para ver/jugar.
+
+**Montaje que funcionó (Windows corporativo, sin admin):**
+- **Python 3.10 por zip *embeddable*** (`python-3.10.11-embed-amd64.zip`), no por instalador: el MSI de python.org lo **bloquea la política corporativa** (`ExitCode 1603`, rollback). El embeddable es solo descomprimir (per-user). Para que pip funcione: en `python310._pth` dejar `Lib\site-packages` + `import site`, y bootstrap con `get-pip.py`. Se invoca por ruta (`& $py ...`), no por el launcher `py`.
+- **`pip install pysc2 "protobuf<4"`** → pysc2 4.0.0, protobuf 3.20.3 (mismo pin que §4). Python **3.10 obligatorio** también aquí (3.11+ rompe pysc2).
+- **Mapas:** el retail los guarda empaquetados (CASC), no sueltos; PySC2 los quiere sueltos en `SC2PATH\Maps\`. Copiados de Brais (`Maps/Melee/Simple64.SC2Map`, `Maps/mini_games/`) a la carpeta Maps de Windows (resultó **escribible sin admin**); las subcarpetas (`Melee/`, `mini_games/`) coinciden con lo que PySC2 espera.
+- `$env:SC2PATH = "C:\Program Files (x86)\StarCraft II"`.
+
+**Comandos validados** (PowerShell; `$py` = ruta al python embeddable):
+```
+& $py -m pysc2.bin.play  --map Simple64                                                       # juego 3D real
+& $py -m pysc2.bin.agent --map MoveToBeacon --agent pysc2.agents.scripted_agent.MoveToBeacon  # agente en vivo, renderizado
+& $py -m pysc2.bin.play  --replay "ruta\al.SC2Replay"                                          # ver un replay
+```
+
+**Version-lock (lo crítico de los replays).** Un `.SC2Replay` exige *exactamente* la build que lo grabó (entre versiones cambian datos/lógica). Brais = **4.10 / Base75689** (última build Linux de Blizzard, 2019); Windows retail = **Base96883** (actual, autoactualizada). Un replay de Brais da en Windows `ValueError: Unknown game version: 4.10.0. Known versions: ['latest']` salvo que exista `Versions\Base75689\`, que se consigue **dejando que el cliente retail la descargue** (abrir un replay 4.10 en el retail dispara el version-switcher); tras eso PySC2 también puede. No es problema de SO (un replay 4.10 se vería en un Windows con 4.10): es que **Linux está congelado en 4.10 y Windows va en la última**.
+
+**Flujo resultante:** Brais = entrenar/datos (headless, sin gráficos por MIG) · Windows = ver/jugar con gráficos. Para revisar partidas con cinemática lo limpio es **grabar en la versión del visor** (Windows actual) y evitar el version-lock; transportar replays 4.10 de Brais exige la Base75689 en Windows. Pendiente: `play_vs_agent` (humano-vs-agente, §7.3.3).
 
 ---
 
@@ -182,8 +203,21 @@ Tensión de fondo: **binario de 2019 + GPU en MIG (sin gráficos) + Mesa moderna
 
 `sc2_rl_infra/online/a2c_beacon.py` — A2C (FullyConv, PyTorch) que entrena MoveToBeacon renderizando en el visor software, como adelanto de Fase 3. Requiere torch (instalar **desde PyPI**: `pip install torch`; el índice de PyTorch está bloqueado en Brais, ver §4). Se conduce cualquier agente en el visor con `live_view --agent módulo.Clase`.
 
-**Estado (dónde se dejó).** Corre y entrena (torch entró por PyPI, visor en vivo OK), pero **con un solo env aún no converge**: a ~180 updates el reward seguía a nivel aleatorio (~0.4, mejor 1). Es **arranque frío** — la recompensa nativa es escasa al principio (el marine rara vez pisa el beacon por azar → pocos +1 → gradiente débil) y un solo env es un setup débil. Sin bug aparente (el agente se mueve, la selección funciona, el loss es no-nulo).
+**Arranque frío (sin shaping).** Corre y entrena (torch entró por PyPI, visor en vivo OK), pero **con un solo env y reward nativo no converge**: a ~180 updates el reward seguía a nivel aleatorio (~0.4, mejor 1). Es **arranque frío** — la recompensa nativa es escasa al principio (el marine rara vez pisa el beacon por azar → pocos +1 → gradiente débil) y un solo env es un setup débil. Sin bug aparente (el agente se mueve, la selección funciona, el loss es no-nulo). Este caso se reproduce hoy con `--noshaped`.
 
-**Siguiente paso si se retoma el spike.** **Reward shaping** por distancia (recompensa densa por acercarse al beacon, potential-based) para que aprenda en minutos; opcionalmente más exploración (`--entropy`) o varios envs en paralelo (rompe el "ver uno en vivo"). Techo de referencia: el agente scripted `pysc2.agents.scripted_agent.MoveToBeacon` (vía `live_view --agent`) resuelve el mapa (~25/episodio); el aleatorio (~1) es el suelo.
+**Reward shaping implementado (2026-05-27, `--shaped` default ON).** Shaping potential-based por distancia marine→beacon (`beacon_distance` sobre `feature_screen[player_relative]`: SELF=1, NEUTRAL=3): `F = shape_coef·(γ·Φ' − Φ)` con `Φ = −dist_norm`, premiando acercarse. Detalles: se **salta en el step en que se toca el beacon** (reaparece lejos → ese salto no es "alejarse") y al terminar el episodio; el reward que se **muestra y se compara con los baselines sigue siendo el nativo** (el shaping solo entra en el cómputo de returns/ventajas). Flags nuevos: `--shaped/--noshaped`, `--shape_coef` (1.0), `--render_every` (1). Techo de referencia: el agente scripted `pysc2.agents.scripted_agent.MoveToBeacon` (vía `live_view --agent`) resuelve el mapa (~25/episodio); el aleatorio (~1) es el suelo.
+
+**Probado en Brais (2026-05-28, 1 env con visor).** Run de ~1000 updates con `--shape_coef 2 --entropy 0.01 --fps 30`: **no convergió**. `mejor=3` (mejoró sobre el random ~1) pero `reward medio(20)` osciló 0.5-0.8 y **bajó** al final del run (0.80 → 0.50 en las últimas ~150 updates). Conjetura: con un solo env esos valores agresivos amplifican el ruido del gradiente y descalibran la política. **Recomendación para el primer run del paralelo: defaults** (`--shape_coef 1`, `--entropy 1e-3`); subirlos solo si sigue plano.
+
+**A2C paralelo + checkpoints + save_replay (2026-05-28, `cf28f08`).** Refactor de `a2c_beacon` con dos modos:
+- `--num_envs N` (default 1): con N>1 lanza N subprocesos SC2 vía `multiprocessing.spawn` + pipes, forward batched `(N,2,H,W)`, returns/ventajas vectorizados `(T,N)`, shaping por env. **Headless** (sin visor). Sweet spot N=8 (RESULTS §6). El modo 1-env con visor se preserva intacto.
+- `--save_checkpoint_every N` + `--checkpoint_dir`: guarda `{model, optimizer, update, total_steps, best, recent}` cada N updates y al salir (también en Ctrl+C, `try/finally`). `--load_checkpoint <ruta>` reanuda.
+- `--save_replay_every N` + `--replay_dir`: `save_replay_episodes` al SC2Env (cada env guarda un `.SC2Replay` cada N episodios suyos).
+
+**Estado: solo validado en sandbox** (py_compile + lógica numpy de helpers en aislado). El paralelo **NO se ha probado con SC2 real**; `spawn` + SC2 + pipes pueden tener sorpresas. **Smoke test obligado antes del run de 8:**
+```
+python -m sc2_rl_infra.online.a2c_beacon --num_envs 2 --updates 50 --save_checkpoint_every 25 --log_every 5
+```
+Espera ver `lanzando 2 envs SC2 en paralelo (headless)...` → `2 envs listos en ~6-10s` → logs `[a2c_beacon] update 5 | envs 2 | reward medio(20) ... | NN step/s` → 2 checkpoints en `checkpoints/a2c_beacon/`. Si va, lanzar el real con `--num_envs 8 --save_checkpoint_every 100 --save_replay_every 200` (con defaults de entropy/shape_coef).
 
 **Ojo:** es un spike mínimo, **no la arquitectura de AlphaStar** (Fase 1: encoder de entidades + espacial + LSTM + heads autoregresivos). No sustituye al plan — **Fase 1 (behaviour cloning) sigue siendo el siguiente paso oficial**; el dataset de replays humanos es su primera tarea (ver §5, RESULTS §9).

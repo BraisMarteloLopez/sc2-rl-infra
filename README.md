@@ -146,15 +146,24 @@ DISPLAY=:1 python -m sc2_rl_infra.live_view --save_replay --episodes 1   # → ~
 ```
 El `.SC2Replay` es el artefacto portátil. Para verlo con **gráficos reales**: copiarlo a Windows (`scp` o SFTP de MobaXterm) y abrirlo en el cliente de SC2 (misma versión que lo grabó). Ver `NOTES §7.3`.
 
-### Entrenamiento en vivo (spike de Fase 3)
+### Entrenamiento (spike de Fase 3)
 
-Un A2C mínimo (PyTorch, FullyConv) que **aprende** MoveToBeacon mientras lo ves entrenar en el visor (el reward medio sube en la cabecera). Es un anticipo de Fase 3, no sustituye al plan. Requiere PyTorch (la red es minúscula; CPU basta):
+Un A2C mínimo (PyTorch, FullyConv) que **aprende** MoveToBeacon. Dos modos según `--num_envs`. Requiere PyTorch (la red es minúscula; CPU basta):
 ```bash
-pip install torch          # desde PyPI; el índice de PyTorch (download.pytorch.org) está bloqueado en Brais (ver NOTES §4)
-DISPLAY=:1 python -m sc2_rl_infra.online.a2c_beacon
-# flags: --updates --nsteps --lr --gamma --entropy --value_coef --max_grad_norm --screen --minimap --step_mul --fps --cell --device
+pip install torch    # desde PyPI; download.pytorch.org está bloqueado en Brais (ver NOTES §4)
+
+# Modo VISOR (1 env, debug visual; necesita VNC en :1):
+DISPLAY=:1 python -m sc2_rl_infra.online.a2c_beacon --fps 30
+
+# Modo PARALELO headless (entrenamiento serio; sweet spot N=8, RESULTS §6):
+python -m sc2_rl_infra.online.a2c_beacon --num_envs 8 \
+    --save_checkpoint_every 100 --save_replay_every 200
 ```
-Estado: corre y entrena, pero con un solo env **aún no converge** (arranque frío); siguiente paso = reward shaping. Detalle en `NOTES §8`. Techo de referencia: `live_view --agent pysc2.agents.scripted_agent.MoveToBeacon`. RL es quisquilloso: si el reward sigue plano, prueba `--entropy 0.01` o `--lr 3e-4`.
+Flags: `--num_envs --updates --nsteps --lr --gamma --entropy --shaped --shape_coef --value_coef --max_grad_norm --screen --minimap --step_mul --device --log_every --save_checkpoint_every --checkpoint_dir --load_checkpoint --save_replay_every --replay_dir` (+ `--fps --cell --render_every` solo modo visor).
+
+Shaping potential-based por distancia (`--shaped`, default ON) rompe el arranque frío que dejaba el reward plano (~1) con reward nativo escaso. El reward que se muestra/compara es siempre el **nativo**; caso plano de referencia con `--noshaped`. Checkpoints en `--checkpoint_dir` (default `checkpoints/a2c_beacon/`); replays bajo `~/StarCraftII/Replays/<--replay_dir>/`. Reanuda con `--load_checkpoint <ruta>`.
+
+Estado (2026-05-28): shaping evaluado en 1 env — con `--shape_coef 2 --entropy 0.01` la política se descalibra (`NOTES §8`); empezar con **defaults**. Modo paralelo + checkpoints shipped pero **no validado en SC2** — smoke test obligado antes del N=8: `--num_envs 2 --updates 50 --save_checkpoint_every 25 --log_every 5`. Techo de referencia: scripted (`live_view --agent pysc2.agents.scripted_agent.MoveToBeacon`) ~25/episodio; suelo random ~1.
 
 ---
 
