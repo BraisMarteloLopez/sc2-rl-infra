@@ -2,7 +2,7 @@
 
 Documento vivo de decisiones tomadas, restricciones detectadas y decisiones aparcadas durante Fase 0.
 
-Última actualización: 2026-05-27.
+Última actualización: 2026-05-28.
 
 ---
 
@@ -205,6 +205,19 @@ Lo que en Brais se descartó (§7.2) **funciona en Windows**: PySC2 conduce el c
 
 **Arranque frío (sin shaping).** Corre y entrena (torch entró por PyPI, visor en vivo OK), pero **con un solo env y reward nativo no converge**: a ~180 updates el reward seguía a nivel aleatorio (~0.4, mejor 1). Es **arranque frío** — la recompensa nativa es escasa al principio (el marine rara vez pisa el beacon por azar → pocos +1 → gradiente débil) y un solo env es un setup débil. Sin bug aparente (el agente se mueve, la selección funciona, el loss es no-nulo). Este caso se reproduce hoy con `--noshaped`.
 
-**Reward shaping implementado (2026-05-27, `--shaped` default ON).** Shaping potential-based por distancia marine→beacon (`beacon_distance` sobre `feature_screen[player_relative]`: SELF=1, NEUTRAL=3): `F = shape_coef·(γ·Φ' − Φ)` con `Φ = −dist_norm`, premiando acercarse. Detalles: se **salta en el step en que se toca el beacon** (reaparece lejos → ese salto no es "alejarse") y al terminar el episodio; el reward que se **muestra y se compara con los baselines sigue siendo el nativo** (el shaping solo entra en el cómputo de returns/ventajas). Flags nuevos: `--shaped/--noshaped`, `--shape_coef` (1.0), `--render_every` (1). **Pendiente: confirmar en vivo en Brais** que con el shaping el reward trepa del ~1 hacia el techo del scripted (~25); si sigue plano, subir `--shape_coef`/`--entropy` o bajar `--lr`. Techo de referencia: el agente scripted `pysc2.agents.scripted_agent.MoveToBeacon` (vía `live_view --agent`) resuelve el mapa (~25/episodio); el aleatorio (~1) es el suelo.
+**Reward shaping implementado (2026-05-27, `--shaped` default ON).** Shaping potential-based por distancia marine→beacon (`beacon_distance` sobre `feature_screen[player_relative]`: SELF=1, NEUTRAL=3): `F = shape_coef·(γ·Φ' − Φ)` con `Φ = −dist_norm`, premiando acercarse. Detalles: se **salta en el step en que se toca el beacon** (reaparece lejos → ese salto no es "alejarse") y al terminar el episodio; el reward que se **muestra y se compara con los baselines sigue siendo el nativo** (el shaping solo entra en el cómputo de returns/ventajas). Flags nuevos: `--shaped/--noshaped`, `--shape_coef` (1.0), `--render_every` (1). Techo de referencia: el agente scripted `pysc2.agents.scripted_agent.MoveToBeacon` (vía `live_view --agent`) resuelve el mapa (~25/episodio); el aleatorio (~1) es el suelo.
+
+**Probado en Brais (2026-05-28, 1 env con visor).** Run de ~1000 updates con `--shape_coef 2 --entropy 0.01 --fps 30`: **no convergió**. `mejor=3` (mejoró sobre el random ~1) pero `reward medio(20)` osciló 0.5-0.8 y **bajó** al final del run (0.80 → 0.50 en las últimas ~150 updates). Conjetura: con un solo env esos valores agresivos amplifican el ruido del gradiente y descalibran la política. **Recomendación para el primer run del paralelo: defaults** (`--shape_coef 1`, `--entropy 1e-3`); subirlos solo si sigue plano.
+
+**A2C paralelo + checkpoints + save_replay (2026-05-28, `cf28f08`).** Refactor de `a2c_beacon` con dos modos:
+- `--num_envs N` (default 1): con N>1 lanza N subprocesos SC2 vía `multiprocessing.spawn` + pipes, forward batched `(N,2,H,W)`, returns/ventajas vectorizados `(T,N)`, shaping por env. **Headless** (sin visor). Sweet spot N=8 (RESULTS §6). El modo 1-env con visor se preserva intacto.
+- `--save_checkpoint_every N` + `--checkpoint_dir`: guarda `{model, optimizer, update, total_steps, best, recent}` cada N updates y al salir (también en Ctrl+C, `try/finally`). `--load_checkpoint <ruta>` reanuda.
+- `--save_replay_every N` + `--replay_dir`: `save_replay_episodes` al SC2Env (cada env guarda un `.SC2Replay` cada N episodios suyos).
+
+**Estado: solo validado en sandbox** (py_compile + lógica numpy de helpers en aislado). El paralelo **NO se ha probado con SC2 real**; `spawn` + SC2 + pipes pueden tener sorpresas. **Smoke test obligado antes del run de 8:**
+```
+python -m sc2_rl_infra.online.a2c_beacon --num_envs 2 --updates 50 --save_checkpoint_every 25 --log_every 5
+```
+Espera ver `lanzando 2 envs SC2 en paralelo (headless)...` → `2 envs listos en ~6-10s` → logs `[a2c_beacon] update 5 | envs 2 | reward medio(20) ... | NN step/s` → 2 checkpoints en `checkpoints/a2c_beacon/`. Si va, lanzar el real con `--num_envs 8 --save_checkpoint_every 100 --save_replay_every 200` (con defaults de entropy/shape_coef).
 
 **Ojo:** es un spike mínimo, **no la arquitectura de AlphaStar** (Fase 1: encoder de entidades + espacial + LSTM + heads autoregresivos). No sustituye al plan — **Fase 1 (behaviour cloning) sigue siendo el siguiente paso oficial**; el dataset de replays humanos es su primera tarea (ver §5, RESULTS §9).
