@@ -1,10 +1,12 @@
 """Agente PySC2 que carga un checkpoint A2C (`.pt`) y lo usa para actuar.
 
-Cierra el ciclo del spike de Fase 3:
+Cierra el ciclo del spike de Fase 3 para cualquier minijuego soportado por
+`a2c_beacon` (MoveToBeacon, CollectMineralShards, FindAndDefeatZerglings,
+DefeatRoaches, DefeatZerglingsAndBanelings):
 
-    Brais entrena (`a2c_beacon --num_envs 12 --save_checkpoint_every 100`)
-        -> `.pt` en `~/sc2-rl-infra/checkpoints/a2c_beacon/`
-        -> este agente lo carga
+    Brais entrena (`a2c_beacon --num_envs 12 --map <minijuego> --save_checkpoint_every 100`)
+        -> `.pt` en `<--checkpoint_dir>/`
+        -> este agente lo carga (cabeza espacial + cabeza Move/Attack)
         -> `live_view --agent` (Brais, feature layers sobre VNC)
             o `pysc2.bin.agent --agent` (Windows, 3D real, NOTES §7.4)
         -> opcionalmente guarda un `.SC2Replay` portable (`live_view --save_replay`).
@@ -50,6 +52,7 @@ from pysc2.agents import base_agent
 from pysc2.lib import actions, features
 
 _MOVE_SCREEN = actions.FUNCTIONS.Move_screen.id
+_ATTACK_SCREEN = actions.FUNCTIONS.Attack_screen.id
 _PLAYER_RELATIVE = features.SCREEN_FEATURES.player_relative.index
 _SELECTED = features.SCREEN_FEATURES.selected.index
 
@@ -57,21 +60,29 @@ _DEFAULT_CHECKPOINT_DIR = os.path.expanduser("~/sc2-rl-infra/checkpoints/a2c_bea
 
 
 # Modelo: duplicado intencional del FullyConv de a2c_beacon.py (ver "Nota técnica"
-# arriba). Misma arquitectura exacta, por eso el state_dict del .pt encaja.
+# arriba). Misma arquitectura exacta, por eso el state_dict del .pt encaja. Tiene
+# cabeza espacial + cabeza de "tipo" (Move/Attack) + crítico. Checkpoints viejos
+# (sin la cabeza de tipo) cargan con strict=False y la cabeza nueva arranca
+# aleatoria — en MoveToBeacon ambas acciones llegan al beacon, así que el agente
+# entrenado sobre la versión anterior sigue jugando bien.
 class _FullyConv(nn.Module):
-    def __init__(self, in_ch, size):
+    def __init__(self, in_ch, size, num_action_types=2):
         super().__init__()
         self.conv1 = nn.Conv2d(in_ch, 16, 5, padding=2)
         self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
         self.spatial = nn.Conv2d(32, 1, 1)
+        self.action_type = nn.Linear(32, num_action_types)
         self.value = nn.Linear(32, 1)
+        self.num_action_types = num_action_types
 
     def forward(self, x):
         h = F.relu(self.conv1(x))
         h = F.relu(self.conv2(h))
+        pooled = h.mean(dim=(2, 3))
         spatial_logits = self.spatial(h).flatten(1)
-        value = self.value(h.mean(dim=(2, 3))).squeeze(-1)
-        return spatial_logits, value
+        type_logits = self.action_type(pooled)
+        value = self.value(pooled).squeeze(-1)
+        return spatial_logits, type_logits, value
 
 
 def _obs_to_tensor(fs, device):
@@ -147,22 +158,41 @@ class A2CCheckpointAgent(base_agent.BaseAgent):
         screen_shape = obs_spec["feature_screen"]
         self.size = int(screen_shape[1])
         self.model = _FullyConv(in_ch=self._in_ch, size=self.size).to(self.device)
-        self.model.load_state_dict(self._ckpt_state)
+        # strict=False por si el .pt es de una versión sin la cabeza action_type
+        # (entrenado con la versión inicial del modelo): se cargan las capas
+        # compartidas y la nueva arranca aleatoria. En MoveToBeacon ambos action
+        # types reducen al mismo comportamiento, así que el agente sigue jugando.
+        missing, unexpected = self.model.load_state_dict(self._ckpt_state, strict=False)
+        if missing:
+            print(f"[A2CCheckpointAgent] capas nuevas no en el .pt -> {missing}; "
+                  f"empiezan aleatorias.", flush=True)
+        if unexpected:
+            print(f"[A2CCheckpointAgent] capas inesperadas en el .pt -> {unexpected}; "
+                  f"ignoradas.", flush=True)
         self.model.eval()
 
     def step(self, obs):
         super().step(obs)
-        # MoveToBeacon: si el marine aún no está seleccionado, hazlo (mismo patrón
-        # que select_if_needed en a2c_beacon). Cualquier paso de selección no es
-        # decisión del modelo, así que ni siquiera hacemos forward.
+        # Si el marine aún no está seleccionado, hazlo (mismo patrón que
+        # select_if_needed en a2c_beacon). El paso de selección no es decisión del
+        # modelo: no hacemos forward.
         if _MOVE_SCREEN not in obs.observation["available_actions"]:
             return actions.FUNCTIONS.select_army("select")
         fs = np.asarray(obs.observation["feature_screen"])
         with torch.no_grad():
-            logits, _ = self.model(_obs_to_tensor(fs, self.device))
+            spatial_logits, type_logits, _ = self.model(_obs_to_tensor(fs, self.device))
             if self.deterministic:
-                idx = int(torch.argmax(logits, dim=-1).item())
+                spatial_idx = int(torch.argmax(spatial_logits, dim=-1).item())
+                type_idx = int(torch.argmax(type_logits, dim=-1).item())
             else:
-                idx = int(torch.distributions.Categorical(logits=logits).sample().item())
-        y, x = idx // self.size, idx % self.size
+                spatial_idx = int(torch.distributions.Categorical(
+                    logits=spatial_logits).sample().item())
+                type_idx = int(torch.distributions.Categorical(
+                    logits=type_logits).sample().item())
+        y, x = spatial_idx // self.size, spatial_idx % self.size
+        # Dispatch Move vs Attack según la cabeza categórica. Si Attack no está
+        # disponible (minigames sin enemigos), fallback a Move.
+        avail = obs.observation["available_actions"]
+        if type_idx == 1 and _ATTACK_SCREEN in avail:
+            return actions.FUNCTIONS.Attack_screen("now", [int(x), int(y)])
         return actions.FUNCTIONS.Move_screen("now", [int(x), int(y)])
