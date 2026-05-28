@@ -165,6 +165,25 @@ Shaping potential-based por distancia (`--shaped`, default ON) rompe el arranque
 
 Estado (2026-05-28): **SPIKE RESUELTO** en Brais. Paralelo con `--num_envs 12` (+ `OMP_NUM_THREADS=1`) convergió a `reward medio(20) ≈ 25.4` (techo del scripted ~25, mejor 29) en **~160 updates / ~2:30 min de pared**. Lo que con 1 env y shaping agresivo no convergía, en paralelo con defaults sale en minutos — el escalado a N envs era la clave. Detalle en `NOTES §8`. Checkpoints en `~/sc2-rl-infra/checkpoints/a2c_beacon/`. Techo de referencia: scripted (`live_view --agent pysc2.agents.scripted_agent.MoveToBeacon`) ~25/episodio; suelo random ~1.
 
+### Ver al agente entrenado (cargar un checkpoint)
+
+Para cargar un `.pt` y verlo actuar (con visor y, opcionalmente, grabar replay), usa el wrapper `sc2_rl_infra.online.checkpoint_agent.A2CCheckpointAgent`. La ruta del checkpoint va por variable de entorno (`A2C_CHECKPOINT`); si no se da, coge el `.pt` más reciente de `~/sc2-rl-infra/checkpoints/a2c_beacon/`. Cierra el ciclo *entrenar → ver al agente entrenado → guardar replay*:
+```bash
+# Brais: feature layers en vivo + .SC2Replay portable del agente entrenado
+DISPLAY=:1 A2C_CHECKPOINT=~/sc2-rl-infra/checkpoints/a2c_beacon/checkpoint_000300.pt \
+    python -m sc2_rl_infra.live_view \
+        --agent sc2_rl_infra.online.checkpoint_agent.A2CCheckpointAgent \
+        --save_replay --episodes 3
+```
+Variables extra: `A2C_DETERMINISTIC=1` (argmax en vez de muestrear, default 0); `A2C_DEVICE=cuda` (default cpu).
+
+Windows (3D real, `NOTES §7.4`) requiere `pip install torch` y `sc2_rl_infra` importable en el Python embeddable (p.ej. `PYTHONPATH` apuntando al repo clonado, o copiando la carpeta `sc2_rl_infra/`); luego:
+```powershell
+$env:A2C_CHECKPOINT = "C:\ruta\al\checkpoint.pt"
+& $py -m pysc2.bin.agent --map MoveToBeacon `
+    --agent sc2_rl_infra.online.checkpoint_agent.A2CCheckpointAgent --max_episodes 3
+```
+
 ---
 
 ## Documentación
