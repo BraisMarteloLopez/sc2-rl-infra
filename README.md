@@ -177,7 +177,9 @@ OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m sc2_rl_infra.online.a2c_beacon \
 ```
 Techos realistas con esta arquitectura (`select_army` + Move/Attack, sin selección por unidad): MoveToBeacon ~25 ✓, CollectMineralShards ~17 (los 2 marines arrastrados juntos), FindAndDefeatZerglings ~baseline-SC2LE (~45), DefeatZerglingsAndBanelings limitado (vs banelings la separación es clave y no hay selección por marine). Detalle por mapa en `NOTES §8`.
 
-Estado (2026-05-28): **MoveToBeacon RESUELTO** en Brais (~25.4 en ~2:30 min con `--num_envs 12`). Resto de minijuegos: **código preparado, sin validar todavía**. Checkpoints en `--checkpoint_dir`; replays en `~/StarCraftII/Replays/<--replay_dir>/`. Reanuda con `--load_checkpoint <ruta>`.
+Checkpoints en `<--checkpoint_dir>/`: `checkpoint_NNNNNN.pt` (snapshot periódico), `checkpoint_final_NNNNNN.pt` (al cerrar) y **`best.pt`** (se sobreescribe cuando `reward medio(20)` mejora; es el .pt para inferencia/demo, lo prefiere por defecto el wrapper-agente). Reanuda entrenamiento con `--load_checkpoint <ruta>`. Replays en `~/StarCraftII/Replays/<--replay_dir>/`.
+
+Estado (2026-05-28): **MoveToBeacon RESUELTO** en Brais (~25.4 en ~2:30 min con `--num_envs 12`). Resto de minijuegos: **código preparado, sin validar todavía**.
 
 ### Ver al agente entrenado (cargar un checkpoint)
 

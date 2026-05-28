@@ -218,7 +218,12 @@ Lo que en Brais se descartó (§7.2) **funciona en Windows**: PySC2 conduce el c
 
 Throughput observado: **~214 step/s a N=12** — muy por debajo del techo de Fase 0 (4744 step/s con `no_op`, RESULTS §4). El cuello ya no es SC2 sino el padre Python (pickle de los 12 `feature_screen` por step + numpy + torch). Optimizable (mandar solo las 2 capas que usa el modelo, vectorizar `beacon_distance`, etc.), pero **ya no hace falta para el spike** — convergió en minutos igualmente. **Recomendación de receta**: `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` delante del comando para que torch no acapare cores que necesitan los workers (RESULTS §6 daba N=8 como sweet spot asumiendo trainer multi-hilo; con torch en 1 hilo, N=12 satura los 12 cores del LXC y converge sin problemas).
 
-Checkpoints en `~/sc2-rl-infra/checkpoints/a2c_beacon/checkpoint_NNNNNN.pt` (cada 100 updates + `_final_` al cerrar). Reanudar con `--load_checkpoint <ruta>`.
+Checkpoints en `<--checkpoint_dir>/`:
+- `checkpoint_NNNNNN.pt` — snapshot periódico cada `--save_checkpoint_every` updates.
+- `checkpoint_final_NNNNNN.pt` — al cerrar (también en Ctrl+C, `try/finally`).
+- **`best.pt`** — se sobreescribe cada vez que el `reward medio(20)` supera el récord del run (ventana llena ≥20 episodios). Es **el .pt que querrás cargar para inferencia/demo**: protege de la degradación tardía que vimos en el run 1-env. El wrapper-agente (`A2CCheckpointAgent`) lo prefiere por defecto sobre los numerados. `best_avg` se persiste en el dict del `.pt`, así que `--load_checkpoint` reanuda manteniendo el récord (no sobreescribirá `best.pt` con un avg peor).
+
+Reanudar entrenamiento con `--load_checkpoint <ruta>` (acepta cualquiera de los tres; lo natural es el último numerado o el `_final_`).
 
 **Wrapper-agente para el checkpoint (2026-05-28, `sc2_rl_infra.online.checkpoint_agent.A2CCheckpointAgent`).** Carga un `.pt` y se conduce con el modelo entrenado; compatible con `live_view --agent` (Brais, feature layers + `--save_replay`) y `pysc2.bin.agent --agent` (Windows, 3D real §7.4). Configuración por variables de entorno: `A2C_CHECKPOINT` (ruta del `.pt`; si no se da, usa el más reciente del checkpoint_dir), `A2C_DETERMINISTIC=1` (argmax en vez de muestrear) y `A2C_DEVICE` (cpu/cuda). El módulo **duplica intencionadamente** el `FullyConv` de `a2c_beacon` en vez de importarlo: importar `a2c_beacon` lo carga con sus ~20 flags absl (`step_mul`, `screen`, …) que colisionarían con las de `live_view` / `pysc2.bin.agent`. Mientras el modelo no cambie, esa duplicación es aceptable. Con esto **cierra el ciclo entero del spike**: entrenar paralelo (Brais) → checkpoint → ver al agente entrenado (Brais feature layers o Windows 3D) → `.SC2Replay` portable.
 

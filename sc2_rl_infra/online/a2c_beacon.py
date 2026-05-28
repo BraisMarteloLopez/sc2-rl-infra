@@ -178,7 +178,7 @@ def beacon_distance(fs, size):
 
 
 # --- checkpoint helpers ---
-def save_checkpoint(path, model, opt, update, total_steps, best, recent):
+def save_checkpoint(path, model, opt, update, total_steps, best, best_avg, recent):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     torch.save({
         "model": model.state_dict(),
@@ -186,6 +186,7 @@ def save_checkpoint(path, model, opt, update, total_steps, best, recent):
         "update": int(update),
         "total_steps": int(total_steps),
         "best": float(best),
+        "best_avg": float(best_avg),
         "recent": list(recent),
     }, path)
     print(f"[a2c_beacon] checkpoint -> {path}", flush=True)
@@ -212,10 +213,11 @@ def load_checkpoint(path, model, opt):
     update = int(ckpt.get("update", 0))
     total_steps = int(ckpt.get("total_steps", 0))
     best = float(ckpt.get("best", 0.0))
+    best_avg = float(ckpt.get("best_avg", float("-inf")))   # checkpoints viejos no lo tienen
     recent = collections.deque(ckpt.get("recent", []), maxlen=20)
     print(f"[a2c_beacon] checkpoint cargado <- {path} "
-          f"(update {update}, best {best:.2f})", flush=True)
-    return update, total_steps, best, recent
+          f"(update {update}, best {best:.2f}, best_avg {best_avg:.2f})", flush=True)
+    return update, total_steps, best, best_avg, recent
 
 
 # --- visor (modo 1 env, software, sin OpenGL; mismo enfoque que live_view) ---
@@ -464,9 +466,10 @@ def run_single(device):
     opt = torch.optim.RMSprop(model.parameters(), lr=FLAGS.lr, eps=1e-5)
 
     start_update, total_steps, best = 0, 0, 0.0
+    best_avg = float("-inf")   # mejor reward medio(20) visto: criterio para best.pt
     recent = collections.deque(maxlen=20)
     if FLAGS.load_checkpoint:
-        start_update, total_steps, best, recent = load_checkpoint(
+        start_update, total_steps, best, best_avg, recent = load_checkpoint(
             FLAGS.load_checkpoint, model, opt)
 
     win = init_window(FLAGS.cell)
@@ -604,16 +607,31 @@ def run_single(device):
                           f"reward medio(20) {mean_r:6.2f} | mejor {best:5.0f} | "
                           f"loss {loss.item():8.3f} | steps {total_steps}", flush=True)
 
-                if (FLAGS.save_checkpoint_every > 0
-                        and update % FLAGS.save_checkpoint_every == 0):
-                    path = os.path.join(FLAGS.checkpoint_dir, f"checkpoint_{update:06d}.pt")
-                    save_checkpoint(path, model, opt, update, total_steps, best, recent)
+                if FLAGS.save_checkpoint_every > 0:
+                    # Snapshot periódico cada N updates: foto en bruto del entrenamiento.
+                    if update % FLAGS.save_checkpoint_every == 0:
+                        path = os.path.join(FLAGS.checkpoint_dir,
+                                            f"checkpoint_{update:06d}.pt")
+                        save_checkpoint(path, model, opt, update, total_steps,
+                                        best, best_avg, recent)
+                    # best.pt: se sobreescribe cuando reward medio(20) mejora. Requiere
+                    # ventana llena (20 episodios) para evitar ruido inicial. Es el .pt
+                    # que querrás cargar para inferencia/demo (el wrapper-agente lo prefiere
+                    # por defecto sobre los numerados).
+                    if len(recent) >= recent.maxlen:
+                        cur_avg = sum(recent) / len(recent)
+                        if cur_avg > best_avg:
+                            best_avg = cur_avg
+                            best_path = os.path.join(FLAGS.checkpoint_dir, "best.pt")
+                            save_checkpoint(best_path, model, opt, update, total_steps,
+                                            best, best_avg, recent)
     finally:
         if FLAGS.save_checkpoint_every > 0 and update > start_update:
             try:
                 path = os.path.join(FLAGS.checkpoint_dir,
                                     f"checkpoint_final_{update:06d}.pt")
-                save_checkpoint(path, model, opt, update, total_steps, best, recent)
+                save_checkpoint(path, model, opt, update, total_steps,
+                                best, best_avg, recent)
             except Exception as e:
                 print(f"[a2c_beacon] guardado final del checkpoint falló: {e}", flush=True)
         pygame.quit()
@@ -628,9 +646,10 @@ def run_parallel(device):
     opt = torch.optim.RMSprop(model.parameters(), lr=FLAGS.lr, eps=1e-5)
 
     start_update, total_steps, best = 0, 0, 0.0
+    best_avg = float("-inf")   # mejor reward medio(20) visto: criterio para best.pt
     recent = collections.deque(maxlen=20)
     if FLAGS.load_checkpoint:
-        start_update, total_steps, best, recent = load_checkpoint(
+        start_update, total_steps, best, best_avg, recent = load_checkpoint(
             FLAGS.load_checkpoint, model, opt)
 
     env_cfg = dict(
@@ -743,10 +762,20 @@ def run_parallel(device):
                       f"loss {loss.item():8.3f} | steps {total_steps} | "
                       f"{sps:6.0f} step/s", flush=True)
 
-            if (FLAGS.save_checkpoint_every > 0
-                    and update % FLAGS.save_checkpoint_every == 0):
-                path = os.path.join(FLAGS.checkpoint_dir, f"checkpoint_{update:06d}.pt")
-                save_checkpoint(path, model, opt, update, total_steps, best, recent)
+            if FLAGS.save_checkpoint_every > 0:
+                if update % FLAGS.save_checkpoint_every == 0:
+                    path = os.path.join(FLAGS.checkpoint_dir,
+                                        f"checkpoint_{update:06d}.pt")
+                    save_checkpoint(path, model, opt, update, total_steps,
+                                    best, best_avg, recent)
+                # best.pt: nuevo récord de reward medio(20) -> sobreescribe.
+                if len(recent) >= recent.maxlen:
+                    cur_avg = sum(recent) / len(recent)
+                    if cur_avg > best_avg:
+                        best_avg = cur_avg
+                        best_path = os.path.join(FLAGS.checkpoint_dir, "best.pt")
+                        save_checkpoint(best_path, model, opt, update, total_steps,
+                                        best, best_avg, recent)
     except KeyboardInterrupt:
         print("\n[a2c_beacon] interrumpido (Ctrl+C); guardando último checkpoint...",
               flush=True)
@@ -755,7 +784,8 @@ def run_parallel(device):
             try:
                 path = os.path.join(FLAGS.checkpoint_dir,
                                     f"checkpoint_final_{update:06d}.pt")
-                save_checkpoint(path, model, opt, update, total_steps, best, recent)
+                save_checkpoint(path, model, opt, update, total_steps,
+                                best, best_avg, recent)
             except Exception as e:
                 print(f"[a2c_beacon] guardado final del checkpoint falló: {e}", flush=True)
         try:
