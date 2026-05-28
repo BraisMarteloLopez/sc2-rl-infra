@@ -222,4 +222,20 @@ Checkpoints en `~/sc2-rl-infra/checkpoints/a2c_beacon/checkpoint_NNNNNN.pt` (cad
 
 **Wrapper-agente para el checkpoint (2026-05-28, `sc2_rl_infra.online.checkpoint_agent.A2CCheckpointAgent`).** Carga un `.pt` y se conduce con el modelo entrenado; compatible con `live_view --agent` (Brais, feature layers + `--save_replay`) y `pysc2.bin.agent --agent` (Windows, 3D real §7.4). Configuración por variables de entorno: `A2C_CHECKPOINT` (ruta del `.pt`; si no se da, usa el más reciente del checkpoint_dir), `A2C_DETERMINISTIC=1` (argmax en vez de muestrear) y `A2C_DEVICE` (cpu/cuda). El módulo **duplica intencionadamente** el `FullyConv` de `a2c_beacon` en vez de importarlo: importar `a2c_beacon` lo carga con sus ~20 flags absl (`step_mul`, `screen`, …) que colisionarían con las de `live_view` / `pysc2.bin.agent`. Mientras el modelo no cambie, esa duplicación es aceptable. Con esto **cierra el ciclo entero del spike**: entrenar paralelo (Brais) → checkpoint → ver al agente entrenado (Brais feature layers o Windows 3D) → `.SC2Replay` portable.
 
-**Ojo:** es un spike mínimo, **no la arquitectura de AlphaStar** (Fase 1: encoder de entidades + espacial + LSTM + heads autoregresivos). No sustituye al plan — **Fase 1 (behaviour cloning) sigue siendo el siguiente paso oficial**; el dataset de replays humanos es su primera tarea (ver §5, RESULTS §9).
+**Extensión a otros minijuegos PySC2 (2026-05-28).** Dos cambios para que el mismo `a2c_beacon` entrene cualquier minijuego cuyo control sea `select_army` + `Move_screen` / `Attack_screen`:
+
+- **Flag `--map <MAP>`** (default `MoveToBeacon`): se pasa a `SC2Env(map_name=...)`. Trivial; sin esto el script estaba cableado a MoveToBeacon.
+- **Cabeza de "tipo de acción"** en `FullyConv`: la política ahora factoriza `P(action) = P(spatial) · P(type)` con `type ∈ {Move_screen, Attack_screen}`. Log-prob y entropía suman ambas cabezas (estándar A2C multi-discrete). Worker / `VecSC2Env.step` reciben `(x, y, type_idx)` por pipe. En minijuegos sin Attack disponible (no ocurre en los que nos interesan), fallback automático a Move. Backward-compatible: checkpoints viejos (solo cabeza espacial) cargan con `strict=False` y la cabeza nueva arranca aleatoria → el agente de MoveToBeacon sigue jugando porque `Attack_screen` sobre el beacon (NEUTRAL) equivale a moverse.
+
+**Política por minijuego — qué esperamos** (validar en Brais):
+
+| Mapa | Acciones | Shaping `beacon_distance` | Techo realista con esta arquitectura | Baseline SC2LE |
+|---|---|---|---|---|
+| **MoveToBeacon** ✓ | Move | Sí (marine→beacon) | ~25 (validado a 25.4) | ~26 |
+| **CollectMineralShards** | Move | Sí (los shards son NEUTRAL → reutilizado tal cual como "ir al shard más cercano") | ~17 (limitado: `select_army` arrastra los 2 marines juntos; para ~100 hace falta selección por marine) | ~17 (FullyConv del paper) / ~100 top |
+| **FindAndDefeatZerglings** | Move + **Attack** | No (no hay NEUTRAL → se desactiva solo; el `+1/kill -1/muerte` ya es denso) | ~baseline si el agente aprende a *atacar* (lo que con Move solo no podía hacer); el shaping de exploración por visibilidad sería la siguiente palanca si se atasca | ~45 |
+| **DefeatZerglingsAndBanelings** | Move + **Attack** | No | Limitado: la arquitectura no separa marines, y vs banelings (AoE) la separación es la jugada óptima. Verá baseline-ish, no top. | ~75 (con split óptimo) |
+
+**Limitación arquitectural pendiente** (no implementada, anotada como futuro): **selección por unidad** (`select_point` sobre cada marine), que es el escalón para acercarse a top-baselines en CollectMineralShards (asignar 1 marine a 1 shard) y DefeatZerglingsAndBanelings (split anti-baneling). Es un cambio sustancial: rompe la simetría "todas mis unidades como grupo", añade una nueva cabeza categórica "qué unidad selecciono" + posiblemente un orden temporal de selección/comando. No procede mientras estemos en spike; se anota como TODO real de Fase 3.
+
+**Ojo:** es un spike, **no la arquitectura de AlphaStar** (Fase 1: encoder de entidades + espacial + LSTM + heads autoregresivos). No sustituye al plan — **Fase 1 (behaviour cloning) sigue siendo el siguiente paso oficial**; el dataset de replays humanos es su primera tarea (ver §5, RESULTS §9).

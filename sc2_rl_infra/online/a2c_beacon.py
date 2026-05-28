@@ -1,7 +1,11 @@
-"""A2C que APRENDE MoveToBeacon — dos modos: VISOR (1 env) o PARALELO headless (N envs).
+"""A2C que aprende minijuegos PySC2 — dos modos: VISOR (1 env) o PARALELO headless (N envs).
 
-Una red conv pequeña (FullyConv, PyTorch) mira `feature_screen` y aprende DÓNDE mover
-el marine (cabeza espacial screen×screen) más un crítico. A2C n-step.
+Una red conv pequeña (FullyConv, PyTorch) mira `feature_screen` y aprende DÓNDE clicar
+(cabeza espacial screen×screen) y QUÉ acción usar (cabeza categórica Move/Attack), más
+un crítico. A2C n-step. El módulo se llama `a2c_beacon` por razones históricas — empezó
+como spike de MoveToBeacon — pero hoy soporta cualquier minijuego PySC2 cuyo control
+sea `select_army` + `Move_screen` / `Attack_screen` (MoveToBeacon, CollectMineralShards,
+FindAndDefeatZerglings, DefeatRoaches, DefeatZerglingsAndBanelings). Se elige con `--map`.
 
 Dos modos según `--num_envs`:
 
@@ -33,15 +37,23 @@ Requisito: PyTorch en el env → `pip install torch` (CPU vale: la red es minús
 
 Uso (Brais, env `sc2-rl-infra` activo):
 
-    # Visor en vivo (1 env, requiere VNC en :1, tools/vnc.sh):
+    # Visor en vivo, MoveToBeacon (default, requiere VNC en :1, tools/vnc.sh):
     DISPLAY=:1 python -m sc2_rl_infra.online.a2c_beacon --fps 30
 
-    # Entrenamiento paralelo (8 envs, headless, sin VNC):
-    python -m sc2_rl_infra.online.a2c_beacon --num_envs 8 \\
-        --save_checkpoint_every 100 --save_replay_every 200
+    # Paralelo headless, MoveToBeacon (la receta que convergió en ~2:30 min):
+    OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m sc2_rl_infra.online.a2c_beacon \\
+        --num_envs 12 --save_checkpoint_every 100 --save_replay_every 200
+
+    # Otros minijuegos (cambias --map y, opcional, --checkpoint_dir):
+    OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m sc2_rl_infra.online.a2c_beacon \\
+        --num_envs 12 --map CollectMineralShards \\
+        --checkpoint_dir checkpoints/a2c_shards --save_checkpoint_every 100
+    OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m sc2_rl_infra.online.a2c_beacon \\
+        --num_envs 12 --map FindAndDefeatZerglings --noshaped \\
+        --checkpoint_dir checkpoints/a2c_zerglings --save_checkpoint_every 100
 
     # Reanudar de un checkpoint:
-    python -m sc2_rl_infra.online.a2c_beacon --num_envs 8 \\
+    python -m sc2_rl_infra.online.a2c_beacon --num_envs 12 \\
         --load_checkpoint checkpoints/a2c_beacon/checkpoint_001000.pt
 
 Cierra la ventana (o Esc/Q) para detener en modo visor; Ctrl+C en modo paralelo (guarda
@@ -71,6 +83,9 @@ FLAGS = flags.FLAGS
 flags.DEFINE_integer("updates", 4000, "Número de updates A2C.")
 flags.DEFINE_integer("nsteps", 16, "Decisiones por update (rollout n-step).")
 flags.DEFINE_integer("num_envs", 1, "Envs SC2 en paralelo (1 = visor; >1 = headless paralelo).")
+flags.DEFINE_string("map", "MoveToBeacon", "Minijuego PySC2 a entrenar (MoveToBeacon, "
+                    "CollectMineralShards, FindAndDefeatZerglings, DefeatRoaches, "
+                    "DefeatZerglingsAndBanelings, ...).")
 flags.DEFINE_float("lr", 7e-4, "Learning rate (RMSprop).")
 flags.DEFINE_float("gamma", 0.99, "Factor de descuento.")
 flags.DEFINE_float("entropy", 1e-3, "Coeficiente de entropía (exploración).")
@@ -100,6 +115,7 @@ flags.DEFINE_string("replay_dir", "sc2-rl-infra/a2c",
                     "Carpeta de replays bajo ~/StarCraftII/Replays/ (o absoluta).")
 
 _MOVE_SCREEN = actions.FUNCTIONS.Move_screen.id
+_ATTACK_SCREEN = actions.FUNCTIONS.Attack_screen.id
 _SELECT_ARMY = actions.FUNCTIONS.select_army.id
 _PLAYER_RELATIVE = features.SCREEN_FEATURES.player_relative.index
 _SELECTED = features.SCREEN_FEATURES.selected.index
@@ -107,21 +123,34 @@ _PR_SELF = int(features.PlayerRelative.SELF)        # 1  (el marine)
 _PR_NEUTRAL = int(features.PlayerRelative.NEUTRAL)  # 3  (el beacon)
 
 
-# --- modelo: FullyConv (encoder espacial -> política espacial + valor) ---
+# --- modelo: FullyConv (encoder espacial -> política espacial + tipo de acción + valor) ---
 class FullyConv(nn.Module):
-    def __init__(self, in_ch, size):
+    """Política multi-cabeza: dónde clicar (espacial) y qué acción (Move vs Attack).
+
+    Para MoveToBeacon / CollectMineralShards basta con Move_screen, pero la cabeza
+    `action_type` no estorba (en esos mapas Attack_screen sobre el target equivale
+    a moverse). Para los combat-minigames (FindAndDefeatZerglings,
+    DefeatRoaches/ZerglingsAndBanelings) la cabeza Attack es la que hace que los
+    marines se enfrenten en vez de pasearse hasta morir.
+    """
+
+    def __init__(self, in_ch, size, num_action_types=2):
         super().__init__()
         self.conv1 = nn.Conv2d(in_ch, 16, 5, padding=2)
         self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
-        self.spatial = nn.Conv2d(32, 1, 1)      # logits espaciales -> dónde moverse
-        self.value = nn.Linear(32, 1)           # crítico
+        self.spatial = nn.Conv2d(32, 1, 1)         # logits espaciales -> dónde
+        self.action_type = nn.Linear(32, num_action_types)  # logits Move / Attack
+        self.value = nn.Linear(32, 1)              # crítico
+        self.num_action_types = num_action_types
 
     def forward(self, x):
         h = F.relu(self.conv1(x))
         h = F.relu(self.conv2(h))
-        spatial_logits = self.spatial(h).flatten(1)         # (B, size*size)
-        value = self.value(h.mean(dim=(2, 3))).squeeze(-1)  # (B,)
-        return spatial_logits, value
+        pooled = h.mean(dim=(2, 3))                              # (B, 32)
+        spatial_logits = self.spatial(h).flatten(1)              # (B, size*size)
+        type_logits = self.action_type(pooled)                   # (B, num_action_types)
+        value = self.value(pooled).squeeze(-1)                   # (B,)
+        return spatial_logits, type_logits, value
 
 
 def obs_to_tensor(fs, device):
@@ -164,9 +193,22 @@ def save_checkpoint(path, model, opt, update, total_steps, best, recent):
 
 def load_checkpoint(path, model, opt):
     ckpt = torch.load(path, map_location="cpu")
-    model.load_state_dict(ckpt["model"])
+    # strict=False: si el .pt es de una versión anterior del modelo (p.ej. sin la
+    # cabeza action_type), las capas faltantes/sobrantes se reportan pero no
+    # bloquean la carga. Las capas nuevas arrancan aleatorias.
+    missing, unexpected = model.load_state_dict(ckpt["model"], strict=False)
+    if missing:
+        print(f"[a2c_beacon] checkpoint: capas nuevas (no en el .pt) -> {missing}; "
+              f"empiezan aleatorias.", flush=True)
+    if unexpected:
+        print(f"[a2c_beacon] checkpoint: capas inesperadas -> {unexpected}; "
+              f"ignoradas.", flush=True)
     if opt is not None and "optimizer" in ckpt:
-        opt.load_state_dict(ckpt["optimizer"])
+        try:
+            opt.load_state_dict(ckpt["optimizer"])
+        except (ValueError, KeyError) as e:
+            print(f"[a2c_beacon] estado del optimizador NO cargado (cambio de "
+                  f"arquitectura): {e}; empieza fresco.", flush=True)
     update = int(ckpt.get("update", 0))
     total_steps = int(ckpt.get("total_steps", 0))
     best = float(ckpt.get("best", 0.0))
@@ -255,9 +297,13 @@ def _worker(child_remote, parent_remote, env_cfg, worker_id):
     """Subproceso que corre un SC2Env y dialoga con el trainer por pipe.
 
     Protocolo (recibido del padre):
-        ("step", x, y)  -> Move_screen([x, y]); auto-reset al terminar episodio.
-                           Envía (feature_screen_array, reward_native, done).
-        ("close",)      -> cierra el env y termina.
+        ("step", x, y, type_idx)
+            type_idx == 0 -> Move_screen("now", [x, y])
+            type_idx == 1 -> Attack_screen("now", [x, y]) si está disponible,
+                             si no, fallback a Move_screen.
+            Auto-reset al terminar episodio. Envía (feature_screen_array,
+            reward_native, done).
+        ("close",) -> cierra el env y termina.
 
     Al arrancar envía el feature_screen inicial (tras el select inicial del marine).
     """
@@ -292,8 +338,15 @@ def _worker(child_remote, parent_remote, env_cfg, worker_id):
         while True:
             cmd = child_remote.recv()
             if cmd[0] == "step":
-                _, x, y = cmd
-                obs = env.step([actions.FUNCTIONS.Move_screen("now", [int(x), int(y)])])[0]
+                _, x, y, type_idx = cmd
+                xi, yi = int(x), int(y)
+                avail = obs.observation["available_actions"]
+                if int(type_idx) == 1 and _ATTACK_SCREEN in avail:
+                    action_call = actions.FUNCTIONS.Attack_screen("now", [xi, yi])
+                else:
+                    # type_idx == 0, o type_idx == 1 pero Attack no disponible: Move.
+                    action_call = actions.FUNCTIONS.Move_screen("now", [xi, yi])
+                obs = env.step([action_call])[0]
                 r = float(obs.reward)
                 done = bool(obs.last())
                 if done:
@@ -371,9 +424,12 @@ class VecSC2Env:
         return list(self.last_obs)
 
     def step(self, actions_list):
-        """actions_list: list[(x, y)] por worker. Devuelve (list[fs], list[r], list[done])."""
-        for remote, (x, y) in zip(self.parent_remotes, actions_list):
-            remote.send(("step", x, y))
+        """actions_list: list[(x, y, type_idx)] por worker. type_idx: 0=Move, 1=Attack.
+
+        Devuelve (list[fs], list[r], list[done]).
+        """
+        for remote, (x, y, type_idx) in zip(self.parent_remotes, actions_list):
+            remote.send(("step", x, y, type_idx))
         new_fs, rewards, dones = [], [], []
         for remote in self.parent_remotes:
             fs, r, d = remote.recv()
@@ -425,7 +481,7 @@ def run_single(device):
     update = start_update  # por si el bucle no se ejecuta antes del finally
 
     env_kwargs = dict(
-        map_name="MoveToBeacon",
+        map_name=FLAGS.map,
         players=[sc2_env.Agent(sc2_env.Race.terran)],
         agent_interface_format=features.AgentInterfaceFormat(
             feature_dimensions=features.Dimensions(screen=size, minimap=FLAGS.minimap),
@@ -453,34 +509,52 @@ def run_single(device):
                     obs = select_if_needed(env, obs, win, font, FLAGS.cell)
                     fs = np.asarray(obs.observation["feature_screen"])
                     d_before = beacon_distance(fs, size) if FLAGS.shaped else None
-                    logits, value = model(obs_to_tensor(fs, device))
-                    dist = torch.distributions.Categorical(logits=logits)
-                    idx = dist.sample()
-                    y, x = int(idx.item()) // size, int(idx.item()) % size
+                    spatial_logits, type_logits, value = model(obs_to_tensor(fs, device))
+                    spatial_dist = torch.distributions.Categorical(logits=spatial_logits)
+                    type_dist = torch.distributions.Categorical(logits=type_logits)
+                    spatial_idx = spatial_dist.sample()
+                    type_idx = type_dist.sample()
+                    y, x = int(spatial_idx.item()) // size, int(spatial_idx.item()) % size
 
-                    obs = env.step([actions.FUNCTIONS.Move_screen("now", [x, y])])[0]
+                    # Dispatch Move vs Attack según la cabeza categórica. Fallback a Move
+                    # si Attack_screen no está disponible (típico en minigames sin enemigos).
+                    avail = obs.observation["available_actions"]
+                    if int(type_idx.item()) == 1 and _ATTACK_SCREEN in avail:
+                        action_call = actions.FUNCTIONS.Attack_screen("now", [x, y])
+                    else:
+                        action_call = actions.FUNCTIONS.Move_screen("now", [x, y])
+                    obs = env.step([action_call])[0]
                     fs_new = np.asarray(obs.observation["feature_screen"])
                     r_native, done = float(obs.reward), obs.last()
                     total_steps += 1
                     ep_reward += r_native   # se reporta SIEMPRE el nativo (comparable a baselines)
 
-                    # Shaping potential-based (Ng 1999): premia acercarse al beacon. Se salta
-                    # al tocarlo (reaparece lejos, ese salto no es "alejarse") y al terminar.
+                    # Shaping potential-based (Ng 1999). En mapas con un único target NEUTRAL
+                    # (MoveToBeacon: el beacon; CollectMineralShards: los shards) `beacon_distance`
+                    # calcula marine->target y guía al agente. En combat-minigames no hay NEUTRAL
+                    # -> devuelve None y el shaping queda inactivo automáticamente (el reward
+                    # nativo +1/kill -1/muerte ya es más denso que en MoveToBeacon).
                     r = r_native
                     if FLAGS.shaped and not done and r_native == 0.0 and d_before is not None:
                         d_after = beacon_distance(fs_new, size)
                         if d_after is not None:
                             r += FLAGS.shape_coef * (FLAGS.gamma * (-d_after) - (-d_before))
 
-                    logps.append(dist.log_prob(idx).squeeze(0))
+                    # Política factorizada (espacial × tipo): log-prob y entropía suman, asumiendo
+                    # independencia de las dos cabezas. Estándar A2C multi-discrete.
+                    logps.append(
+                        (spatial_dist.log_prob(spatial_idx) + type_dist.log_prob(type_idx)).squeeze(0)
+                    )
                     values.append(value.squeeze(0))
-                    entropies.append(dist.entropy().squeeze(0))
+                    entropies.append(
+                        (spatial_dist.entropy() + type_dist.entropy()).squeeze(0)
+                    )
                     rewards.append(r)
                     dones.append(1.0 if done else 0.0)
 
                     if FLAGS.render_every > 0 and total_steps % FLAGS.render_every == 0:
                         mean_r = (sum(recent) / len(recent)) if recent else 0.0
-                        header = (f"A2C MoveToBeacon | update {update}/{FLAGS.updates} | "
+                        header = (f"A2C {FLAGS.map} | update {update}/{FLAGS.updates} | "
                                   f"reward medio(20): {mean_r:.1f} | mejor: {best:.0f} | "
                                   f"steps {total_steps}")
                         render(win, font, fs_new, header, FLAGS.cell)
@@ -502,7 +576,7 @@ def run_single(device):
 
                 with torch.no_grad():
                     last_fs = np.asarray(obs.observation["feature_screen"])
-                    _, last_v = model(obs_to_tensor(last_fs, device))
+                    _, _, last_v = model(obs_to_tensor(last_fs, device))
                     R = float(last_v.item()) * (0.0 if dones[-1] else 1.0)
                 returns = []
                 for r, d in zip(reversed(rewards), reversed(dones)):
@@ -560,7 +634,7 @@ def run_parallel(device):
             FLAGS.load_checkpoint, model, opt)
 
     env_cfg = dict(
-        map_name="MoveToBeacon",
+        map_name=FLAGS.map,
         screen=size,
         minimap=FLAGS.minimap,
         step_mul=FLAGS.step_mul,
@@ -587,16 +661,20 @@ def run_parallel(device):
                             if FLAGS.shaped else [None] * num_envs)
 
                 inp = obs_to_tensor(np.stack(obs_fs, axis=0), device)
-                logits, values = model(inp)
-                dist = torch.distributions.Categorical(logits=logits)
-                idx = dist.sample()
-                logp = dist.log_prob(idx)
-                ent = dist.entropy()
+                spatial_logits, type_logits, values = model(inp)
+                spatial_dist = torch.distributions.Categorical(logits=spatial_logits)
+                type_dist = torch.distributions.Categorical(logits=type_logits)
+                spatial_idx = spatial_dist.sample()
+                type_idx = type_dist.sample()
+                # Log-prob y entropía suman las dos cabezas (asume independencia).
+                logp = spatial_dist.log_prob(spatial_idx) + type_dist.log_prob(type_idx)
+                ent = spatial_dist.entropy() + type_dist.entropy()
 
-                idx_np = idx.cpu().numpy()
+                idx_np = spatial_idx.cpu().numpy()
+                types_np = type_idx.cpu().numpy()
                 ys = (idx_np // size).tolist()
                 xs = (idx_np % size).tolist()
-                actions_list = list(zip(xs, ys))
+                actions_list = list(zip(xs, ys, types_np.tolist()))
 
                 new_obs_fs, rewards_native, dones = vec.step(actions_list)
                 total_steps += num_envs
@@ -633,7 +711,7 @@ def run_parallel(device):
 
             # Bootstrap: V del estado tras el último step, masked por done[T-1].
             with torch.no_grad():
-                _, last_v = model(obs_to_tensor(np.stack(obs_fs, axis=0), device))
+                _, _, last_v = model(obs_to_tensor(np.stack(obs_fs, axis=0), device))
 
             returns = torch.zeros(FLAGS.nsteps, num_envs, device=device)
             R = last_v * (1.0 - done_buf[-1])

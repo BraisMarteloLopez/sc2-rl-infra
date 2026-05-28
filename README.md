@@ -159,11 +159,25 @@ DISPLAY=:1 python -m sc2_rl_infra.online.a2c_beacon --fps 30
 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m sc2_rl_infra.online.a2c_beacon --num_envs 12 \
     --save_checkpoint_every 100 --save_replay_every 200
 ```
-Flags: `--num_envs --updates --nsteps --lr --gamma --entropy --shaped --shape_coef --value_coef --max_grad_norm --screen --minimap --step_mul --device --log_every --save_checkpoint_every --checkpoint_dir --load_checkpoint --save_replay_every --replay_dir` (+ `--fps --cell --render_every` solo modo visor).
+Flags: `--map --num_envs --updates --nsteps --lr --gamma --entropy --shaped --shape_coef --value_coef --max_grad_norm --screen --minimap --step_mul --device --log_every --save_checkpoint_every --checkpoint_dir --load_checkpoint --save_replay_every --replay_dir` (+ `--fps --cell --render_every` solo modo visor).
 
-Shaping potential-based por distancia (`--shaped`, default ON) rompe el arranque frío que dejaba el reward plano (~1) con reward nativo escaso. El reward que se muestra/compara es siempre el **nativo**; caso plano de referencia con `--noshaped`. Checkpoints en `--checkpoint_dir` (default `checkpoints/a2c_beacon/`); replays bajo `~/StarCraftII/Replays/<--replay_dir>/`. Reanuda con `--load_checkpoint <ruta>`.
+La política tiene **dos cabezas**: espacial (dónde clicar, 84×84) y categórica (Move_screen vs Attack_screen). En minijuegos sin enemigos la cabeza Attack se comporta como Move; en combate la cabeza Attack es la que hace que los marines se enfrenten en vez de pasearse hasta morir. Shaping potential-based por distancia al target NEUTRAL (`--shaped`, default ON) funciona en MoveToBeacon y CollectMineralShards; en combat-minigames sin NEUTRAL se desactiva solo (el `+1/kill -1/muerte` ya es denso). El reward que se muestra/compara es siempre el **nativo**.
 
-Estado (2026-05-28): **SPIKE RESUELTO** en Brais. Paralelo con `--num_envs 12` (+ `OMP_NUM_THREADS=1`) convergió a `reward medio(20) ≈ 25.4` (techo del scripted ~25, mejor 29) en **~160 updates / ~2:30 min de pared**. Lo que con 1 env y shaping agresivo no convergía, en paralelo con defaults sale en minutos — el escalado a N envs era la clave. Detalle en `NOTES §8`. Checkpoints en `~/sc2-rl-infra/checkpoints/a2c_beacon/`. Techo de referencia: scripted (`live_view --agent pysc2.agents.scripted_agent.MoveToBeacon`) ~25/episodio; suelo random ~1.
+**Otros minijuegos** con `--map`:
+```bash
+# CollectMineralShards: los shards son NEUTRAL -> shaping vale tal cual.
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m sc2_rl_infra.online.a2c_beacon \
+    --num_envs 12 --map CollectMineralShards \
+    --checkpoint_dir checkpoints/a2c_shards --save_checkpoint_every 100
+
+# FindAndDefeatZerglings: combate; la cabeza Attack se entrena, --noshaped (no hay target NEUTRAL).
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m sc2_rl_infra.online.a2c_beacon \
+    --num_envs 12 --map FindAndDefeatZerglings --noshaped \
+    --checkpoint_dir checkpoints/a2c_zerglings --save_checkpoint_every 100
+```
+Techos realistas con esta arquitectura (`select_army` + Move/Attack, sin selección por unidad): MoveToBeacon ~25 ✓, CollectMineralShards ~17 (los 2 marines arrastrados juntos), FindAndDefeatZerglings ~baseline-SC2LE (~45), DefeatZerglingsAndBanelings limitado (vs banelings la separación es clave y no hay selección por marine). Detalle por mapa en `NOTES §8`.
+
+Estado (2026-05-28): **MoveToBeacon RESUELTO** en Brais (~25.4 en ~2:30 min con `--num_envs 12`). Resto de minijuegos: **código preparado, sin validar todavía**. Checkpoints en `--checkpoint_dir`; replays en `~/StarCraftII/Replays/<--replay_dir>/`. Reanuda con `--load_checkpoint <ruta>`.
 
 ### Ver al agente entrenado (cargar un checkpoint)
 
