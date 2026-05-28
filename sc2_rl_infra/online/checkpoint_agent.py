@@ -95,10 +95,20 @@ def _obs_to_tensor(fs, device):
 
 
 def _latest_checkpoint(dirpath):
-    """Devuelve la ruta al .pt más reciente en `dirpath`, o None si no hay."""
+    """Devuelve la ruta al .pt "más útil" en `dirpath`, o None si no hay.
+
+    Preferencia para inferencia/demo:
+        1. `best.pt` (mejor reward medio(20) visto en el run) si existe.
+        2. Si no, el último `checkpoint_*.pt` numerado por mtime.
+    Si quieres explícitamente otro, pasa `A2C_CHECKPOINT=<ruta>`.
+    """
     if not os.path.isdir(dirpath):
         return None
-    pts = sorted(glob.glob(os.path.join(dirpath, "*.pt")), key=os.path.getmtime)
+    best = os.path.join(dirpath, "best.pt")
+    if os.path.exists(best):
+        return best
+    pts = sorted(glob.glob(os.path.join(dirpath, "checkpoint_*.pt")),
+                 key=os.path.getmtime)
     return pts[-1] if pts else None
 
 
