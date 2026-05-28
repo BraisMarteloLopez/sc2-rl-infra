@@ -101,6 +101,9 @@ flags.DEFINE_string("device", "cpu", "torch device: 'cpu' o 'cuda'.")
 flags.DEFINE_bool("shaped", True, "Reward shaping potential-based por distancia al beacon "
                   "(señal densa que rompe el arranque frío). --noshaped usa solo el reward nativo.")
 flags.DEFINE_float("shape_coef", 1.0, "Peso del shaping por distancia (súbelo si sigue plano).")
+flags.DEFINE_float("explore_coef", 0.0, "Peso del shaping por exploración del minimapa "
+                   "(default 0 = off). Útil en combat-minigames con niebla (FindAndDefeatZerglings): "
+                   "premia ver área nueva, ayuda a romper plateaus de exploración.")
 flags.DEFINE_integer("render_every", 1, "Renderiza 1 de cada N steps del visor. Solo modo 1 env.")
 flags.DEFINE_integer("save_checkpoint_every", 0,
                      "Guarda checkpoint .pt cada N updates (0 = off). También al salir.")
@@ -119,6 +122,7 @@ _ATTACK_SCREEN = actions.FUNCTIONS.Attack_screen.id
 _SELECT_ARMY = actions.FUNCTIONS.select_army.id
 _PLAYER_RELATIVE = features.SCREEN_FEATURES.player_relative.index
 _SELECTED = features.SCREEN_FEATURES.selected.index
+_MINIMAP_VISIBILITY = features.MINIMAP_FEATURES.visibility_map.index  # 0=hidden, 1=fog, 2=visible
 _PR_SELF = int(features.PlayerRelative.SELF)        # 1  (el marine)
 _PR_NEUTRAL = int(features.PlayerRelative.NEUTRAL)  # 3  (el beacon)
 
@@ -175,6 +179,17 @@ def beacon_distance(fs, size):
         return None
     d = math.hypot(sy.mean() - by.mean(), sx.mean() - bx.mean())
     return d / (math.sqrt(2.0) * size)
+
+
+def explored_fraction(vis_mm):
+    """Fracción del minimapa ya visto al menos una vez (visibility_map > 0).
+
+    visibility_map: 0=oculto, 1=fog (visto antes, no ahora), 2=visible. La fracción
+    de celdas con valor>0 crece monotónicamente conforme el agente explora. Se usa
+    como potencial para shaping de exploración (`--explore_coef`).
+    """
+    vm = np.asarray(vis_mm)
+    return float((vm > 0).sum()) / float(vm.size)
 
 
 # --- checkpoint helpers ---
@@ -303,11 +318,13 @@ def _worker(child_remote, parent_remote, env_cfg, worker_id):
             type_idx == 0 -> Move_screen("now", [x, y])
             type_idx == 1 -> Attack_screen("now", [x, y]) si está disponible,
                              si no, fallback a Move_screen.
-            Auto-reset al terminar episodio. Envía (feature_screen_array,
-            reward_native, done).
+            Auto-reset al terminar episodio. Envía la tupla
+            (feature_screen_array, minimap_visibility_array, reward_native, done).
         ("close",) -> cierra el env y termina.
 
-    Al arrancar envía el feature_screen inicial (tras el select inicial del marine).
+    Al arrancar envía la tupla inicial (feature_screen, minimap_visibility) tras
+    el select inicial del marine. La capa visibility_map del minimap se manda
+    aparte (no la usa el modelo, sí el shaping de exploración).
     """
     parent_remote.close()  # solo lo usa el padre
     env = None
@@ -335,7 +352,10 @@ def _worker(child_remote, parent_remote, env_cfg, worker_id):
         env = sc2_env.SC2Env(**env_kwargs)
         obs = env.reset()[0]
         obs = _ensure_marine_selected(env, obs)
-        child_remote.send(np.asarray(obs.observation["feature_screen"]))
+        child_remote.send((
+            np.asarray(obs.observation["feature_screen"]),
+            np.asarray(obs.observation["feature_minimap"])[_MINIMAP_VISIBILITY],
+        ))
 
         while True:
             cmd = child_remote.recv()
@@ -354,7 +374,11 @@ def _worker(child_remote, parent_remote, env_cfg, worker_id):
                 if done:
                     obs = env.reset()[0]
                 obs = _ensure_marine_selected(env, obs)
-                child_remote.send((np.asarray(obs.observation["feature_screen"]), r, done))
+                child_remote.send((
+                    np.asarray(obs.observation["feature_screen"]),
+                    np.asarray(obs.observation["feature_minimap"])[_MINIMAP_VISIBILITY],
+                    r, done,
+                ))
             elif cmd[0] == "close":
                 break
             # comandos desconocidos: ignorar
@@ -409,37 +433,45 @@ class VecSC2Env:
         for c in child_remotes:
             c.close()
 
-        # Recibe el feature_screen inicial de cada worker, con timeout para detectar
-        # workers muertos (SC2 que no arrancó, etc.) en vez de quedarse colgado.
+        # Recibe la tupla inicial (feature_screen, minimap_visibility) de cada worker,
+        # con timeout para detectar workers muertos (SC2 que no arrancó, etc.) en vez
+        # de quedarse colgado.
         self.last_obs = []
+        self.last_vis = []
         for i, remote in enumerate(self.parent_remotes):
             if not remote.poll(timeout=startup_timeout):
                 raise RuntimeError(
                     f"VecSC2Env: worker {i} no envió obs inicial en {startup_timeout}s "
                     f"(¿SC2 falló al arrancar?)."
                 )
-            self.last_obs.append(remote.recv())
+            fs, vis = remote.recv()
+            self.last_obs.append(fs)
+            self.last_vis.append(vis)
 
     def reset(self):
         # Los workers se auto-resetean; este reset devuelve el último estado conocido
-        # (estado inicial al arrancar o el último new_fs recibido).
-        return list(self.last_obs)
+        # (estado inicial al arrancar o el último (fs, vis) recibido).
+        return list(self.last_obs), list(self.last_vis)
 
     def step(self, actions_list):
         """actions_list: list[(x, y, type_idx)] por worker. type_idx: 0=Move, 1=Attack.
 
-        Devuelve (list[fs], list[r], list[done]).
+        Devuelve (list[fs], list[vis_mm], list[r], list[done]). `vis_mm` es la capa
+        `visibility_map` del feature_minimap (0=hidden, 1=fog, 2=visible); la usa el
+        shaping de exploración.
         """
         for remote, (x, y, type_idx) in zip(self.parent_remotes, actions_list):
             remote.send(("step", x, y, type_idx))
-        new_fs, rewards, dones = [], [], []
+        new_fs, new_vis, rewards, dones = [], [], [], []
         for remote in self.parent_remotes:
-            fs, r, d = remote.recv()
+            fs, vis, r, d = remote.recv()
             new_fs.append(fs)
+            new_vis.append(vis)
             rewards.append(r)
             dones.append(d)
         self.last_obs = new_fs
-        return new_fs, rewards, dones
+        self.last_vis = new_vis
+        return new_fs, new_vis, rewards, dones
 
     def close(self):
         for remote in self.parent_remotes:
@@ -512,6 +544,11 @@ def run_single(device):
                     obs = select_if_needed(env, obs, win, font, FLAGS.cell)
                     fs = np.asarray(obs.observation["feature_screen"])
                     d_before = beacon_distance(fs, size) if FLAGS.shaped else None
+                    vis_before = (
+                        explored_fraction(
+                            np.asarray(obs.observation["feature_minimap"])[_MINIMAP_VISIBILITY]
+                        ) if FLAGS.explore_coef > 0 else None
+                    )
                     spatial_logits, type_logits, value = model(obs_to_tensor(fs, device))
                     spatial_dist = torch.distributions.Categorical(logits=spatial_logits)
                     type_dist = torch.distributions.Categorical(logits=type_logits)
@@ -542,6 +579,13 @@ def run_single(device):
                         d_after = beacon_distance(fs_new, size)
                         if d_after is not None:
                             r += FLAGS.shape_coef * (FLAGS.gamma * (-d_after) - (-d_before))
+                    # Shaping de exploración (útil sobre todo en combat-minigames con niebla).
+                    # No se gateéa por evento: la fracción explorada es monotónica.
+                    if FLAGS.explore_coef > 0 and not done and vis_before is not None:
+                        vis_after = explored_fraction(
+                            np.asarray(obs.observation["feature_minimap"])[_MINIMAP_VISIBILITY]
+                        )
+                        r += FLAGS.explore_coef * (vis_after - vis_before)
 
                     # Política factorizada (espacial × tipo): log-prob y entropía suman, asumiendo
                     # independencia de las dos cabezas. Estándar A2C multi-discrete.
@@ -667,7 +711,7 @@ def run_parallel(device):
     print(f"[a2c_beacon] {num_envs} envs listos en {time.time() - t_launch:.1f}s.", flush=True)
 
     ep_reward = [0.0] * num_envs
-    obs_fs = vec.reset()
+    obs_fs, obs_vis = vec.reset()
     update = start_update
     t0 = time.time()
 
@@ -678,6 +722,8 @@ def run_parallel(device):
             for _ in range(FLAGS.nsteps):
                 d_before = ([beacon_distance(fs, size) for fs in obs_fs]
                             if FLAGS.shaped else [None] * num_envs)
+                explored_before = ([explored_fraction(v) for v in obs_vis]
+                                   if FLAGS.explore_coef > 0 else [None] * num_envs)
 
                 inp = obs_to_tensor(np.stack(obs_fs, axis=0), device)
                 spatial_logits, type_logits, values = model(inp)
@@ -695,7 +741,7 @@ def run_parallel(device):
                 xs = (idx_np % size).tolist()
                 actions_list = list(zip(xs, ys, types_np.tolist()))
 
-                new_obs_fs, rewards_native, dones = vec.step(actions_list)
+                new_obs_fs, new_obs_vis, rewards_native, dones = vec.step(actions_list)
                 total_steps += num_envs
 
                 # Tracking de episodios por env, en reward NATIVO (comparable a baselines).
@@ -718,6 +764,16 @@ def run_parallel(device):
                                 train_rewards[i] += FLAGS.shape_coef * (
                                     FLAGS.gamma * (-d_after) - (-d_before[i])
                                 )
+                # Shaping de exploración (combat-minigames con niebla). No gateado por
+                # evento — la fracción explorada es monotónica, no hay "teleport" tipo
+                # beacon-respawn que falsee la señal.
+                if FLAGS.explore_coef > 0:
+                    for i in range(num_envs):
+                        if not dones[i] and explored_before[i] is not None:
+                            exp_after = explored_fraction(new_obs_vis[i])
+                            train_rewards[i] += FLAGS.explore_coef * (
+                                exp_after - explored_before[i]
+                            )
 
                 logps_buf.append(logp)
                 values_buf.append(values)
@@ -727,6 +783,7 @@ def run_parallel(device):
                     np.array(dones, dtype=np.float32), device=device))
 
                 obs_fs = new_obs_fs
+                obs_vis = new_obs_vis
 
             # Bootstrap: V del estado tras el último step, masked por done[T-1].
             with torch.no_grad():
